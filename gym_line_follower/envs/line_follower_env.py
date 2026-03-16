@@ -3,9 +3,9 @@ import json
 import warnings
 from time import time, sleep
 
-import gym
-from gym import spaces
-from gym.utils import seeding
+import gymnasium as gym
+from gymnasium import spaces
+from gymnasium.utils import seeding
 import numpy as np
 import pybullet as p
 
@@ -24,7 +24,7 @@ def fig2rgb_array(fig):
 
 
 class LineFollowerEnv(gym.Env):
-    metadata = {"render.modes": ["human", "gui", "rgb_array", "pov"]}
+    metadata = {"render_modes": ["human", "gui", "rgb_array", "pov"]}
 
     SUPPORTED_OBSV_TYPE = ["points_visible", "points_latch", "points_latch_bool", "camera"]
 
@@ -124,7 +124,9 @@ class LineFollowerEnv(gym.Env):
         self.plot = None
         self.seed()
 
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
+        if seed is not None:
+            self.seed(seed)
         self.step_counter = 0
         self.config.randomize()
 
@@ -161,12 +163,14 @@ class LineFollowerEnv(gym.Env):
 
         obsv = self.follower_bot.step(self.track)
         if len(obsv) < 1:
-            return self.reset()  # TODO: maybe add recursion limit
+            obsv, info = self.reset(seed=seed, options=options)  # TODO: maybe add recursion limit
+            return obsv, info
         else:
             obsv = self.follower_bot.step(self.track)
             if self.obsv_type == "latch_bool":
                 obsv = [obsv, 1.]
-            return obsv
+            info = self._get_info()
+            return obsv, info
 
     def step(self, action):
         action = self.speed_limit * np.array(action)
@@ -217,26 +221,27 @@ class LineFollowerEnv(gym.Env):
         # Time penalty
         reward -= 0.2
 
-        done = False
+        terminated = False
+        truncated = False
         if self.track.done:
-            done = True
+            terminated = True
             print("TRACK DONE")
         elif abs(self.position_on_track - self.track.progress) > 0.5:
             reward = -100
-            done = True
+            terminated = True
             print("PROGRESS DISTANCE LIMIT")
         elif track_err > self.max_track_err:
             reward = -100.
-            done = True
+            terminated = True
             print("TRACK DISTANCE LIMIT")
         elif self.step_counter > self.max_steps:
-            done = True
+            truncated = True
             print("TIME LIMIT")
 
         info = self._get_info()
         self.step_counter += 1
-        self.done = done
-        return observation, reward, done, info
+        self.done = terminated or truncated
+        return observation, reward, terminated, truncated, info
 
     def render(self, mode='human'):
         if self.plot is None and mode in ["human", "rgb_array"]:
@@ -348,12 +353,12 @@ class LineFollowerCameraEnv(LineFollowerEnv):
 if __name__ == '__main__':
 
     env = LineFollowerEnv(gui=True, nb_cam_pts=8, max_track_err=0.4, power_limit=0.4, max_time=600, obsv_type="points_latch")
-    env.reset()
+    obsv, info = env.reset()
     for _ in range(100):
         for i in range(1000):
-            obsv, rew, done, info = env.step((0., 0.))
+            obsv, rew, terminated, truncated, info = env.step((0., 0.))
             sleep(0.05)
-            if done:
+            if terminated or truncated:
                 break
-        env.reset()
+        obsv, info = env.reset()
     env.close()

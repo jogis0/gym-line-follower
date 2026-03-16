@@ -76,7 +76,24 @@ class CameraWindow(ReferenceGeometry):
             multipoint = points
         visible = multipoint.intersection(self.geometry)
         if return_coords:
-            return np.array(visible).reshape((-1, 2))
+            # Handle empty, single-point, and multi-point cases robustly
+            if visible.is_empty:
+                return np.zeros((0, 2))
+
+            # Collect all point coordinates from the result geometry
+            if isinstance(visible, Point):
+                coords = [(visible.x, visible.y)]
+            elif isinstance(visible, MultiPoint):
+                coords = [(p.x, p.y) for p in visible.geoms]
+            else:
+                # Fallback for unexpected geometry types: extract point-like sub-geometries if present
+                geoms = getattr(visible, "geoms", [])
+                coords = [(g.x, g.y) for g in geoms if isinstance(g, Point)]
+
+            if not coords:
+                return np.zeros((0, 2))
+
+            return np.array(coords).reshape((-1, 2))
         else:
             return visible
 
@@ -95,7 +112,20 @@ class CameraWindow(ReferenceGeometry):
 
     def convert_points_to_local(self, points):
         out = self.convert_to_local(MultiPoint(points))
-        return np.array(out)
+
+        # Normalize to an (n, 2) numpy array for downstream code
+        if isinstance(out, Point):
+            coords = [(out.x, out.y)]
+        elif isinstance(out, MultiPoint):
+            coords = [(p.x, p.y) for p in out.geoms]
+        else:
+            geoms = getattr(out, "geoms", [])
+            coords = [(g.x, g.y) for g in geoms if isinstance(g, Point)]
+
+        if not coords:
+            return np.zeros((0, 2))
+
+        return np.array(coords).reshape((-1, 2))
 
     def get_local_window(self):
         return self.__class__(self.window_points, self.origin, self.origin_angle)

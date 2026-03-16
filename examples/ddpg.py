@@ -13,7 +13,7 @@ from rl.agents import DDPGAgent
 from rl.random import OrnsteinUhlenbeckProcess
 from rl.memory import SequentialMemory
 from rl.callbacks import ModelIntervalCheckpoint
-import gym
+import gymnasium as gym
 
 import gym_line_follower  # to register environment
 
