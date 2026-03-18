@@ -1,91 +1,85 @@
-"""
-DDPG Agent learning example using Keras-RL.
-"""
+from __future__ import annotations
 
-import os
-import pickle
+import argparse
+from pathlib import Path
 
-from keras.models import Sequential, Model
-from keras.layers import Dense, Flatten, Concatenate, Input, Dropout
-from keras.optimizers import Adam, RMSprop
-from keras.callbacks import TensorBoard
-from rl.agents import DDPGAgent
-from rl.random import OrnsteinUhlenbeckProcess
-from rl.memory import SequentialMemory
-from rl.callbacks import ModelIntervalCheckpoint
 import gymnasium as gym
+import numpy as np
 
-import gym_line_follower  # to register environment
+import gym_line_follower  # registers LineFollower-v0
 
-# Number of past subsequent observations to take as input
-window_length = 5
-
-
-def build_agent(env):
-    assert len(env.action_space.shape) == 1
-    nb_actions = env.action_space.shape[0]
-    print(env.observation_space.shape)
-
-    # Actor model
-    actor = Sequential()
-    actor.add(Flatten(input_shape=(window_length,) + env.observation_space.shape))
-    actor.add(Dense(128, activation="relu"))
-    actor.add(Dense(128, activation="relu"))
-    actor.add(Dense(64, activation="relu"))
-    actor.add(Dense(nb_actions, activation="tanh"))
-    actor.summary()
-
-    # Critic model
-    action_input = Input(shape=(nb_actions,), name='action_input')
-    observation_input = Input(shape=(window_length,) + env.observation_space.shape, name='observation_input')
-    flattened_observation = Flatten()(observation_input)
-    x = Concatenate()([action_input, flattened_observation])
-    x = Dense(256, activation="relu")(x)
-    x = Dense(256, activation="relu")(x)
-    x = Dense(128, activation="relu")(x)
-    x = Dense(1, activation="linear")(x)
-    critic = Model(inputs=[action_input, observation_input], outputs=x)
-    critic.summary()
-
-    memory = SequentialMemory(limit=1000000, window_length=window_length)
-    # Exploration policy - has a great effect on learning. Should encourage forward motion.
-    # theta - how fast the process returns to the mean
-    # mu - mean value - this should be greater than 0 to encourage forward motion
-    # sigma - volatility of the process
-    random_process = OrnsteinUhlenbeckProcess(size=nb_actions, theta=.5, mu=0.4, sigma=0.3)
-    agent = DDPGAgent(nb_actions=nb_actions, actor=actor, critic=critic, critic_action_input=action_input,
-                      memory=memory, nb_steps_warmup_critic=50, nb_steps_warmup_actor=50,
-                      random_process=random_process, gamma=.99, target_model_update=1e-3)
-    agent.compile(Adam(lr=.001, clipnorm=1.), metrics=['mae'])
-    return agent
+from stable_baselines3 import SAC
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 
 
-def train(env, name, steps=25000, pretrained_path=None):
-    agent = build_agent(env)
-    # Load pre-trained weights optionally
-    if pretrained_path is not None:
-        agent.load_weights(pretrained_path)
+def make_env(*, seed: int, gui: bool) -> gym.Env:
+    env = gym.make(
+        "LineFollower-v0",
+        gui=gui,
+        obsv_type="points_latch",
+        randomize=True,
+    )
+    env.reset(seed=seed)
 
-    save_path = os.path.join("models", name)
-    os.makedirs(save_path, exist_ok=False)
-    os.makedirs(os.path.join(save_path, "checkpoints"), exist_ok=False)
-    h = agent.fit(env, nb_steps=steps, visualize=False, verbose=2,
-                  callbacks=[ModelIntervalCheckpoint(os.path.join(save_path, "checkpoints", "chkpt_{step}.h5f"),
-                                                     interval=int(steps/20), verbose=1),
-                             TensorBoard(log_dir=os.path.join("logs", name))])
+    # This env historically returned lists; SB3 works best with numpy arrays.
+    obs_space = env.observation_space
+    if isinstance(obs_space, gym.spaces.Box):
+        obs_space = gym.spaces.Box(
+            low=np.asarray(obs_space.low, dtype=np.float32),
+            high=np.asarray(obs_space.high, dtype=np.float32),
+            shape=obs_space.shape,
+            dtype=np.float32,
+        )
+    env = gym.wrappers.TransformObservation(
+        env,
+        lambda obs: np.asarray(obs, dtype=np.float32),
+        observation_space=obs_space,
+    )
+    env = Monitor(env)
+    return env
 
-    pickle.dump(h.history, open(os.path.join(save_path, "history.pkl"), "wb"))
 
-    agent.save_weights(os.path.join(save_path, "last_weights.h5f"), overwrite=True)
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", action="store_true", help="Train a new policy.")
+    parser.add_argument("--eval", action="store_true", help="Evaluate an existing policy.")
+    parser.add_argument("--timesteps", type=int, default=200_000)
+    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
+    parser.add_argument("--model-path", type=Path, default=Path("models") / "sac_line_follower.zip")
+    args = parser.parse_args()
+
+    if not args.train and not args.eval:
+        parser.error("Choose one: --train or --eval")
+
+    # Vectorized env is the standard SB3 interface
+    venv = DummyVecEnv([lambda: make_env(seed=args.seed, gui=args.gui)])
+    venv = VecMonitor(venv)
+
+    if args.train:
+        args.model_path.parent.mkdir(parents=True, exist_ok=True)
+        model = SAC(
+            "MlpPolicy",
+            venv,
+            seed=args.seed,
+            verbose=1,
+            tensorboard_log=str(Path("logs") / "sac_line_follower"),
+        )
+        model.learn(total_timesteps=args.timesteps, progress_bar=True)
+        model.save(str(args.model_path))
+
+    if args.eval:
+        model = SAC.load(str(args.model_path), env=venv)
+        obs = venv.reset()
+        while True:
+            action, _state = model.predict(obs, deterministic=True)
+            obs, rewards, dones, infos = venv.step(action)
+            if bool(dones[0]):
+                obs = venv.reset()
+
+    return 0
 
 
-def test(env, path):
-    agent = build_agent(env)
-    agent.load_weights(path)
-    agent.test(env, nb_episodes=20, visualize=False)
-
-
-if __name__ == '__main__':
-    env = gym.make("LineFollower-v0")
-    train(env, "ddpg_1", steps=100000, pretrained_path=None)
-    test(env, "models/ddpg_1/last_weights.h5f")
+if __name__ == "__main__":
+    raise SystemExit(main())

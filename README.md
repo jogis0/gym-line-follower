@@ -43,13 +43,17 @@ installed in place and is editable.
 
 You must run `import gym_line_follwer` before `import gym`. This adds the environment to gym registry and makes it available to `gym.make()`.
 
-Requirements for execution of examples:
-- Keras 2.3.1
-- Tensorflow 1.14
-- Keras-RL 0.4.2
-
 ```
-pip install keras==2.3.1 tensorflow==1.14 keras-rl
+Install:
+  python -m pip install -e .
+  python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
+  python -m pip install "stable-baselines3[extra]"
+
+Train:
+  python examples/ddpg.py --train --timesteps 200000
+
+Evaluate:
+  python examples/ddpg.py --eval --gui
 ```
 
 ## Usage
