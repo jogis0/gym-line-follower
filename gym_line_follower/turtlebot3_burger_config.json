@@ -1,0 +1,24 @@
+{
+  "robot_urdf": "real_turtlebot3_burger.urdf",
+
+  "wheel_joint_left_name": "wheel_left_joint",
+  "wheel_joint_right_name": "wheel_right_joint",
+
+  "wheel_radius": 0.033,
+  "wheel_separation": 0.160,
+  "max_wheel_force": 2.0,
+
+  "cmd_vel_vx_limit": 0.22,
+  "cmd_vel_wz_limit": 2.84,
+
+  "down_camera": {
+    "width": 160,
+    "height": 120,
+    "fov": 90,
+    "near": 0.01,
+    "far": 1.5,
+    "hz": 25,
+    "pos_in_base": [0.08, 0.0, 0.12],
+    "rpy_in_base": [3.14159, 0.0, 0.0]
+  }
+}

@@ -1,3 +1,4 @@
+from typing import Optional
 import os
 
 import numpy as np
@@ -8,19 +9,28 @@ from .line_interpolation import sort_points, interpolate_points
 from .dc_motor import DCMotor
 from .track import Track
 
-JOINT_INDICES = {"left_wheel": 1,
-                 "right_wheel": 2}
-MOTOR_DIRECTIONS = {"left": -1,
-                    "right": -1}
+DEFAULT_URDF = "follower_bot.urdf"
+DEFAULT_WHEEL_JOINT_NAMES = {"left": "chassis_to_left_wheel", "right": "chassis_to_right_wheel"}
+MOTOR_DIRECTIONS = {"left": -1, "right": -1}
 
 
 class LineFollowerBot:
     """
     Class simulating a line following bot with differential steering.
     """
-    SUPPORTED_OBSV_TYPE = ["points_visible", "points_latch", "points_latch_bool", "camera"]
+    SUPPORTED_OBSV_TYPE = ["points_visible", "points_latch", "points_latch_bool", "camera", "down_camera"]
 
-    def __init__(self, pb_client, nb_cam_points, start_xy, start_yaw, config, obsv_type="visible"):
+    def __init__(
+        self,
+        pb_client,
+        nb_cam_points,
+        start_xy,
+        start_yaw,
+        config,
+        obsv_type="visible",
+        *,
+        action_mode: str = "wheel_power",
+    ):
         """
         Initialize bot.
         :param pb_client: pybullet client for simulation interfacing
@@ -42,6 +52,10 @@ class LineFollowerBot:
 
         self.pb_client: p = pb_client
         self.bot = None
+        self.wheel_joint_indices = {"left": None, "right": None}
+        self.action_mode = action_mode.lower()
+        if self.action_mode not in {"wheel_power", "cmd_vel"}:
+            raise ValueError(f"Unsupported action_mode '{action_mode}'. Expected 'wheel_power' or 'cmd_vel'.")
 
         self.prev_pos = ((0., 0.), 0.)
         self.pos = ((0., 0.), 0.)
@@ -67,6 +81,43 @@ class LineFollowerBot:
 
         self.reset(start_xy, start_yaw)
 
+    def _resolve_urdf_path(self):
+        urdf = self.config.get("robot_urdf", DEFAULT_URDF)
+        # allow absolute paths
+        if os.path.isabs(urdf):
+            return urdf
+        return os.path.join(self.local_dir, urdf)
+
+    def _find_joint_index(self, joint_name: str) -> Optional[int]:
+        if not joint_name:
+            return None
+        try:
+            n = self.pb_client.getNumJoints(self.bot)
+        except Exception:
+            return None
+        for idx in range(n):
+            info = self.pb_client.getJointInfo(self.bot, idx)
+            name = info[1].decode("utf-8") if isinstance(info[1], (bytes, bytearray)) else str(info[1])
+            if name == joint_name:
+                return idx
+        return None
+
+    def _init_wheel_joints(self):
+        # Preferred: resolve by joint names in config.
+        left_name = self.config.get("wheel_joint_left_name") or DEFAULT_WHEEL_JOINT_NAMES["left"]
+        right_name = self.config.get("wheel_joint_right_name") or DEFAULT_WHEEL_JOINT_NAMES["right"]
+
+        li = self._find_joint_index(left_name)
+        ri = self._find_joint_index(right_name)
+
+        # Fallback: preserve legacy behavior if names don't match.
+        if li is None or ri is None:
+            li = 1
+            ri = 2
+
+        self.wheel_joint_indices["left"] = li
+        self.wheel_joint_indices["right"] = ri
+
     def reset(self, xy, yaw):
         """
         Reload bot urdf, reposition bot, reinitialize camera window and other stuff.
@@ -74,44 +125,62 @@ class LineFollowerBot:
         :param yaw: starting yaw
         :return: None
         """
-        self.bot = self.pb_client.loadURDF(os.path.join(self.local_dir, "follower_bot.urdf"), basePosition=[*xy, 0.0],
-                                           baseOrientation=self.pb_client.getQuaternionFromEuler([0., 0., yaw]))
+        self.bot = self.pb_client.loadURDF(
+            self._resolve_urdf_path(),
+            basePosition=[*xy, 0.0],
+            baseOrientation=self.pb_client.getQuaternionFromEuler([0.0, 0.0, yaw]),
+        )
+        self._init_wheel_joints()
         self.pos = xy, yaw
 
-        h = self.config["camera_window_height"]
-        wt = self.config["camera_window_top_width"]
-        wb = self.config["camera_window_bottom_width"]
-        d = self.config["camera_window_distance"]
-        win_points = [(d+h, wt/2), (d+h, -wt/2), (d, -wb/2), (d, wb/2)]
+        # Reference geometry used by point-based observations and legacy POV camera.
+        # Provide sane defaults so other render modes don't crash when using different configs.
+        h = float(self.config.get("camera_window_height", 0.160))
+        wt = float(self.config.get("camera_window_top_width", 0.270))
+        wb = float(self.config.get("camera_window_bottom_width", 0.120))
+        d = float(self.config.get("camera_window_distance", 0.112))
+        win_points = [(d + h, wt / 2), (d + h, -wt / 2), (d, -wb / 2), (d, wb / 2)]
 
         self.cam_window = CameraWindow(win_points)
         self.cam_window.move(xy, yaw)
 
-        tref_pt_x = self.config["track_ref_point_x"]
-        self.track_ref_point = ReferencePoint(xy_shift=(tref_pt_x, 0.))
+        tref_pt_x = float(self.config.get("track_ref_point_x", d))
+        self.track_ref_point = ReferencePoint(xy_shift=(tref_pt_x, 0.0))
         self.track_ref_point.move(xy, yaw)
 
-        cam_target_pt_x = self.config["camera_target_point_x"]
-        self.cam_target_point = ReferencePoint(xy_shift=(cam_target_pt_x, 0.))
+        cam_target_pt_x = float(self.config.get("camera_target_point_x", d + h))
+        self.cam_target_point = ReferencePoint(xy_shift=(cam_target_pt_x, 0.0))
         self.cam_target_point.move(xy, yaw)
 
-        cam_pos_pt_x = self.config["camera_position_point_x"]
-        self.cam_pos_point = ReferencePoint(xy_shift=(cam_pos_pt_x, 0.))
+        cam_pos_pt_x = float(self.config.get("camera_position_point_x", 0.060))
+        self.cam_pos_point = ReferencePoint(xy_shift=(cam_pos_pt_x, 0.0))
         self.cam_pos_point.move(xy, yaw)
 
-        nom_volt = self.config["motor_nominal_voltage"]
-        no_load_speed = self.config["motor_no_load_speed"]
-        stall_torque = self.config["motor_stall_torque"]
-        self.left_motor = DCMotor(nom_volt, no_load_speed, stall_torque)
-        self.right_motor = DCMotor(nom_volt, no_load_speed, stall_torque)
+        if self.action_mode == "wheel_power":
+            nom_volt = float(self.config["motor_nominal_voltage"])
+            no_load_speed = float(self.config["motor_no_load_speed"])
+            stall_torque = float(self.config["motor_stall_torque"])
+            self.left_motor = DCMotor(nom_volt, no_load_speed, stall_torque)
+            self.right_motor = DCMotor(nom_volt, no_load_speed, stall_torque)
+            self.volts = float(self.config["volts"])
+        else:
+            self.left_motor = None
+            self.right_motor = None
+            self.volts = 0.0
 
-        self.volts = self.config["volts"]
-
-        # Disable joint motors prior to using torque control
-        self.pb_client.setJointMotorControl2(bodyIndex=self.bot, jointIndex=JOINT_INDICES["left_wheel"],
-                                             controlMode=self.pb_client.VELOCITY_CONTROL, force=0)
-        self.pb_client.setJointMotorControl2(bodyIndex=self.bot, jointIndex=JOINT_INDICES["right_wheel"],
-                                             controlMode=self.pb_client.VELOCITY_CONTROL, force=0)
+        # Disable default joint motors prior to explicit control
+        self.pb_client.setJointMotorControl2(
+            bodyIndex=self.bot,
+            jointIndex=self.wheel_joint_indices["left"],
+            controlMode=self.pb_client.VELOCITY_CONTROL,
+            force=0,
+        )
+        self.pb_client.setJointMotorControl2(
+            bodyIndex=self.bot,
+            jointIndex=self.wheel_joint_indices["right"],
+            controlMode=self.pb_client.VELOCITY_CONTROL,
+            force=0,
+        )
 
     def get_position(self):
         position, orientation = self.pb_client.getBasePositionAndOrientation(self.bot)
@@ -138,8 +207,8 @@ class LineFollowerBot:
         return (vx, vy), wz
 
     def _get_wheel_velocity(self):
-        l_pos, l_vel, l_react, l_torque = self.pb_client.getJointState(self.bot, JOINT_INDICES["left_wheel"])
-        r_pos, r_vel, r_react, r_torque = self.pb_client.getJointState(self.bot, JOINT_INDICES["right_wheel"])
+        l_pos, l_vel, l_react, l_torque = self.pb_client.getJointState(self.bot, self.wheel_joint_indices["left"])
+        r_pos, r_vel, r_react, r_torque = self.pb_client.getJointState(self.bot, self.wheel_joint_indices["right"])
         return l_vel, r_vel
 
     def step(self, track: Track):
@@ -190,6 +259,9 @@ class LineFollowerBot:
         elif self.obsv_type == "camera":
             return self.get_pov_image()
 
+        elif self.obsv_type == "down_camera":
+            return self.get_down_camera_image()
+
     def _set_wheel_torque(self, l_torque, r_torque):
         """
         Apply torque to simulated wheels.
@@ -199,11 +271,11 @@ class LineFollowerBot:
         l_torque *= MOTOR_DIRECTIONS["left"]
         r_torque *= MOTOR_DIRECTIONS["right"]
         self.pb_client.setJointMotorControl2(self.bot,
-                                             jointIndex=JOINT_INDICES["left_wheel"],
+                                             jointIndex=self.wheel_joint_indices["left"],
                                              controlMode=self.pb_client.TORQUE_CONTROL,
                                              force=l_torque)
         self.pb_client.setJointMotorControl2(self.bot,
-                                             jointIndex=JOINT_INDICES["right_wheel"],
+                                             jointIndex=self.wheel_joint_indices["right"],
                                              controlMode=self.pb_client.TORQUE_CONTROL,
                                              force=r_torque)
 
@@ -220,17 +292,51 @@ class LineFollowerBot:
 
     def apply_action(self, action):
         """
-        Apply torque to simulated wheels.
-        :param action:
-        :return: None
+        Apply action to the simulated base.
+
+        - wheel_power: action = (left_power, right_power) in [-1, 1] (legacy)
+        - cmd_vel: action = (vx, wz) in [m/s, rad/s]
         """
-        l_volts, r_volts = self._power_to_volts(*action)
-        l_vel, r_vel = self._get_wheel_velocity()
-        l_vel *= MOTOR_DIRECTIONS["left"]
-        r_vel *= MOTOR_DIRECTIONS["right"]
-        l_torque = self.left_motor.get_torque(l_volts, l_vel)
-        r_torque = self.right_motor.get_torque(r_volts, r_vel)
-        self._set_wheel_torque(l_torque, r_torque)
+        if self.action_mode == "wheel_power":
+            l_volts, r_volts = self._power_to_volts(*action)
+            l_vel, r_vel = self._get_wheel_velocity()
+            l_vel *= MOTOR_DIRECTIONS["left"]
+            r_vel *= MOTOR_DIRECTIONS["right"]
+            l_torque = self.left_motor.get_torque(l_volts, l_vel)
+            r_torque = self.right_motor.get_torque(r_volts, r_vel)
+            self._set_wheel_torque(l_torque, r_torque)
+            return
+
+        if self.action_mode == "cmd_vel":
+            vx, wz = float(action[0]), float(action[1])
+            r = float(self.config.get("wheel_radius", 0.033))
+            L = float(self.config.get("wheel_separation", 0.16))
+            max_force = float(self.config.get("max_wheel_force", 2.0))
+
+            wl = (vx - (wz * L / 2.0)) / r
+            wr = (vx + (wz * L / 2.0)) / r
+
+            # Respect legacy motor direction flags.
+            wl *= MOTOR_DIRECTIONS["left"]
+            wr *= MOTOR_DIRECTIONS["right"]
+
+            self.pb_client.setJointMotorControl2(
+                bodyIndex=self.bot,
+                jointIndex=self.wheel_joint_indices["left"],
+                controlMode=self.pb_client.VELOCITY_CONTROL,
+                targetVelocity=wl,
+                force=max_force,
+            )
+            self.pb_client.setJointMotorControl2(
+                bodyIndex=self.bot,
+                jointIndex=self.wheel_joint_indices["right"],
+                controlMode=self.pb_client.VELOCITY_CONTROL,
+                targetVelocity=wr,
+                force=max_force,
+            )
+            return
+
+        raise RuntimeError(f"Unhandled action_mode {self.action_mode!r}")
 
     def get_pov_image(self):
         """
@@ -252,6 +358,64 @@ class LineFollowerBot:
                                                              viewMatrix=vm,
                                                              projectionMatrix=pm,
                                                              renderer=p.ER_BULLET_HARDWARE_OPENGL)
-        rgb = np.array(rgb)
+        rgb = np.asarray(rgb, dtype=np.uint8)
+        if rgb.ndim == 1:
+            rgb = rgb.reshape((h, w, 4))
+        rgb = rgb[:, :, :3]
+        return rgb
+
+    def get_down_camera_image(self):
+        """
+        Render a downward-facing camera image (intended to approximate a Raspberry Pi camera).
+        Camera intrinsics are approximated via a pinhole projection with FOV.
+        Camera extrinsics are defined as a transform in the robot base frame (config key 'down_camera').
+        """
+        cam_cfg = self.config.get("down_camera", {})
+        width = int(cam_cfg.get("width", 160))
+        height = int(cam_cfg.get("height", 120))
+        fov = float(cam_cfg.get("fov", 90))
+        near = float(cam_cfg.get("near", 0.01))
+        far = float(cam_cfg.get("far", 1.5))
+
+        pos_in_base = np.asarray(cam_cfg.get("pos_in_base", [0.08, 0.0, 0.12]), dtype=np.float32)
+        rpy_in_base = np.asarray(cam_cfg.get("rpy_in_base", [np.pi, 0.0, 0.0]), dtype=np.float32)
+
+        base_pos, base_orn = self.pb_client.getBasePositionAndOrientation(self.bot)
+        base_pos = np.asarray(base_pos, dtype=np.float32)
+
+        # Rotate offset and orientation by base orientation.
+        rot = np.asarray(self.pb_client.getMatrixFromQuaternion(base_orn), dtype=np.float32).reshape(3, 3)
+        cam_pos = base_pos + rot @ pos_in_base
+
+        cam_orn_local = self.pb_client.getQuaternionFromEuler(rpy_in_base.tolist())
+        cam_orn_world = self.pb_client.multiplyTransforms([0, 0, 0], base_orn, [0, 0, 0], cam_orn_local)[1]
+        cam_rot_world = np.asarray(self.pb_client.getMatrixFromQuaternion(cam_orn_world), dtype=np.float32).reshape(3, 3)
+
+        # In camera frame, look along +X with up +Z (matches typical Bullet conventions for view matrix usage below).
+        fwd = cam_rot_world @ np.asarray([1.0, 0.0, 0.0], dtype=np.float32)
+        up = cam_rot_world @ np.asarray([0.0, 0.0, 1.0], dtype=np.float32)
+        target = cam_pos + fwd * 0.2
+
+        vm = self.pb_client.computeViewMatrix(
+            cameraEyePosition=cam_pos.tolist(),
+            cameraTargetPosition=target.tolist(),
+            cameraUpVector=up.tolist(),
+        )
+        pm = self.pb_client.computeProjectionMatrixFOV(
+            fov=fov,
+            aspect=float(width) / float(height),
+            nearVal=near,
+            farVal=far,
+        )
+        w, h, rgb, deth, seg = self.pb_client.getCameraImage(
+            width=width,
+            height=height,
+            viewMatrix=vm,
+            projectionMatrix=pm,
+            renderer=p.ER_BULLET_HARDWARE_OPENGL,
+        )
+        rgb = np.asarray(rgb, dtype=np.uint8)
+        if rgb.ndim == 1:
+            rgb = rgb.reshape((h, w, 4))
         rgb = rgb[:, :, :3]
         return rgb

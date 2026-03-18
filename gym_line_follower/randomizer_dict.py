@@ -25,10 +25,11 @@ class RandomizerDict(dict):
         random.seed(seed)
         for key, value in self.original.items():
             if isinstance(value, dict):
-                try:
-                    value["default"]
-                except KeyError:
-                    raise ValueError("No default value at key '{}'.".format(key))
+                # Support nested configuration dicts that are not meant to be randomized.
+                # Randomization dicts must contain a 'default' entry.
+                if "default" not in value:
+                    self[key] = value
+                    continue
 
                 try:
                     self[key] = random.uniform(*value["range"])
@@ -52,10 +53,10 @@ class RandomizerDict(dict):
         """
         for key, value in self.original.items():
             if isinstance(value, dict):
-                try:
+                if "default" in value:
                     self[key] = value["default"]
-                except KeyError:
-                    raise ValueError("No default value at key '{}'.".format(key))
+                else:
+                    self[key] = value
             elif isinstance(value, (int, float, str, bool)):
                 pass
             else:

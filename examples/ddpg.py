@@ -47,7 +47,7 @@ def main() -> int:
     parser.add_argument("--timesteps", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
-    parser.add_argument("--model-path", type=Path, default=Path("models") / "sac_line_follower.zip")
+    parser.add_argument("--model-path", type=Path, default=Path("model_files") / "sac_line_follower.zip")
     args = parser.parse_args()
 
     if not args.train and not args.eval:

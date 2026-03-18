@@ -1,0 +1,131 @@
+<robot name="turtlebot3_burger_min">
+  <!-- Minimal, PyBullet-friendly TurtleBot3 Burger approximation.-->
+
+  <material name="black"><color rgba="0 0 0 1"/></material>
+  <material name="gray"><color rgba="0.6 0.6 0.6 1"/></material>
+  <material name="orange"><color rgba="1 0.5 0 1"/></material>
+
+  <!-- Root -->
+  <link name="base_link">
+    <visual>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.09" length="0.12"/>
+      </geometry>
+      <material name="orange"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <geometry>
+        <cylinder radius="0.09" length="0.12"/>
+      </geometry>
+    </collision>
+    <inertial>
+      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <mass value="1.0"/>
+      <!-- Rough inertia for a small cylinder body -->
+      <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.003"/>
+    </inertial>
+  </link>
+
+  <!-- Wheels -->
+  <link name="wheel_left_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.018"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.018"/>
+      </geometry>
+    </collision>
+    <contact>
+      <lateral_friction value="1.0"/>
+      <rolling_friction value="0.0"/>
+      <stiffness value="300000"/>
+      <damping value="1000"/>
+    </contact>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+    </inertial>
+  </link>
+
+  <link name="wheel_right_link">
+    <visual>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.018"/>
+      </geometry>
+      <material name="black"/>
+    </visual>
+    <collision>
+      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <geometry>
+        <cylinder radius="0.033" length="0.018"/>
+      </geometry>
+    </collision>
+    <contact>
+      <lateral_friction value="1.0"/>
+      <rolling_friction value="0.0"/>
+      <stiffness value="300000"/>
+      <damping value="1000"/>
+    </contact>
+    <inertial>
+      <mass value="0.05"/>
+      <inertia ixx="0.00002" ixy="0" ixz="0" iyy="0.00002" iyz="0" izz="0.00002"/>
+    </inertial>
+  </link>
+
+  <joint name="wheel_left_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_left_link"/>
+    <!-- wheel_separation ~0.16, so half is 0.08; z aligns to wheel center -->
+    <origin xyz="0.0 0.08 0.033" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <joint name="wheel_right_joint" type="continuous">
+    <parent link="base_link"/>
+    <child link="wheel_right_link"/>
+    <origin xyz="0.0 -0.08 0.033" rpy="0 0 0"/>
+    <axis xyz="0 1 0"/>
+  </joint>
+
+  <!-- Passive caster (simple sphere) -->
+  <link name="caster_link">
+    <visual>
+      <origin xyz="0.06 0 0.01" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+      <material name="gray"/>
+    </visual>
+    <collision>
+      <origin xyz="0.06 0 0.01" rpy="0 0 0"/>
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+    </collision>
+    <contact>
+      <lateral_friction value="0.0"/>
+      <rolling_friction value="0.0"/>
+      <stiffness value="300000"/>
+      <damping value="1000"/>
+    </contact>
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="0.000001" ixy="0" ixz="0" iyy="0.000001" iyz="0" izz="0.000001"/>
+    </inertial>
+  </link>
+
+  <joint name="caster_joint" type="fixed">
+    <parent link="base_link"/>
+    <child link="caster_link"/>
+    <origin xyz="0 0 0" rpy="0 0 0"/>
+  </joint>
+</robot>

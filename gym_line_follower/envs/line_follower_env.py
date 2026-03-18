@@ -24,13 +24,13 @@ def fig2rgb_array(fig):
 
 
 class LineFollowerEnv(gym.Env):
-    metadata = {"render_modes": ["human", "gui", "rgb_array", "pov"]}
+    metadata = {"render_modes": ["human", "gui", "rgb_array", "pov"], "render_fps": 25}
 
-    SUPPORTED_OBSV_TYPE = ["points_visible", "points_latch", "points_latch_bool", "camera"]
+    SUPPORTED_OBSV_TYPE = ["points_visible", "points_latch", "points_latch_bool", "camera", "down_camera"]
 
     def __init__(self, gui=True, nb_cam_pts=8, sub_steps=10, sim_time_step=1 / 250,
                  max_track_err=0.3, power_limit=0.4, max_time=60, config=None, randomize=True, obsv_type="points_latch",
-                 track=None, track_render_params=None):
+                 track=None, track_render_params=None, *, action_mode: str = "wheel_power", render_mode=None):
         """
         Create environment.
         :param gui: True to enable pybullet OpenGL GUI
@@ -53,6 +53,7 @@ class LineFollowerEnv(gym.Env):
                             "camera" - return (240, 320, 3) camera image RGB array
         :param track: Optional track instance to use. If none track is generated randomly.
         :param track_render_params: Track render parameters dict.
+        :param render_mode: Gymnasium render mode. One of: "human", "gui", "rgb_array", "pov".
         """
 
         self.local_dir = os.path.dirname(os.path.dirname(__file__))
@@ -64,6 +65,7 @@ class LineFollowerEnv(gym.Env):
             self.config = config
 
         self.gui = gui
+        self.render_mode = render_mode
         self.nb_cam_pts = nb_cam_pts
         self.sub_steps = sub_steps
         self.sim_time_step = sim_time_step
@@ -76,8 +78,21 @@ class LineFollowerEnv(gym.Env):
         self.obsv_type = obsv_type.lower()
         self.track_render_params = track_render_params
         self.preset_track = track
+        self.action_mode = action_mode.lower()
 
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        if self.action_mode == "wheel_power":
+            self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
+        elif self.action_mode == "cmd_vel":
+            vx_lim = float(self.config.get("cmd_vel_vx_limit", 0.22))
+            wz_lim = float(self.config.get("cmd_vel_wz_limit", 2.84))
+            self.action_space = spaces.Box(
+                low=np.array([-vx_lim, -wz_lim], dtype=np.float32),
+                high=np.array([vx_lim, wz_lim], dtype=np.float32),
+                shape=(2,),
+                dtype=np.float32,
+            )
+        else:
+            raise ValueError(f"Unsupported action_mode '{action_mode}'. Expected 'wheel_power' or 'cmd_vel'.")
 
         if self.obsv_type not in self.SUPPORTED_OBSV_TYPE:
             raise ValueError("Observation type '{}' not supported.".format(self.obsv_type))
@@ -100,6 +115,11 @@ class LineFollowerEnv(gym.Env):
                                                 dtype=np.float32)
         elif self.obsv_type == "camera":
             self.observation_space = spaces.Box(low=0, high=255, shape=(240, 320, 3), dtype=np.uint8)
+        elif self.obsv_type == "down_camera":
+            cam_cfg = self.config.get("down_camera", {})
+            w = int(cam_cfg.get("width", 160))
+            h = int(cam_cfg.get("height", 120))
+            self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
 
         self.pb_client: p = BulletClient(connection_mode=p.GUI if self.gui else p.DIRECT)
         self.pb_client.setPhysicsEngineParameter(enableFileCaching=0)
@@ -151,7 +171,7 @@ class LineFollowerEnv(gym.Env):
         build_track_plane(self.track, width=3, height=2.5, ppm=1500, path=self.local_dir)
         self.pb_client.loadURDF(os.path.join(self.local_dir, "track_plane.urdf"))
         self.follower_bot = LineFollowerBot(self.pb_client, self.nb_cam_pts, self.track.start_xy, start_yaw,
-                                            self.config, obsv_type=self.obsv_type)
+                                            self.config, obsv_type=self.obsv_type, action_mode=self.action_mode)
 
         self.position_on_track = 0.
 
@@ -205,6 +225,8 @@ class LineFollowerEnv(gym.Env):
 
         elif self.obsv_type == "camera":
             self.observation = observation
+        elif self.obsv_type == "down_camera":
+            self.observation = observation
 
         # Track distance error
         track_err = self.track.distance_from_point(self.follower_bot.pos[0])
@@ -243,7 +265,8 @@ class LineFollowerEnv(gym.Env):
         self.done = terminated or truncated
         return observation, reward, terminated, truncated, info
 
-    def render(self, mode='human'):
+    def render(self):
+        mode = self.render_mode or "human"
         if self.plot is None and mode in ["human", "rgb_array"]:
             global plt
             import matplotlib
@@ -317,7 +340,7 @@ class LineFollowerEnv(gym.Env):
         elif mode == "pov":
             return self.follower_bot.get_pov_image()
         else:
-            super(LineFollowerEnv, self).render(mode=mode)
+            return super(LineFollowerEnv, self).render()
 
     def close(self):
         if self.plot:
@@ -346,8 +369,52 @@ class LineFollowerEnv(gym.Env):
 
 class LineFollowerCameraEnv(LineFollowerEnv):
 
-    def __init__(self):
-        super(LineFollowerCameraEnv, self).__init__(obsv_type="camera")
+    def __init__(self, *, render_mode=None, gui=True):
+        super(LineFollowerCameraEnv, self).__init__(obsv_type="camera", render_mode=render_mode, gui=gui)
+
+
+class TurtleBot3LineFollowerEnv(LineFollowerEnv):
+    """
+    TurtleBot3 Burger-like line follower environment:
+    - action: cmd_vel (vx, wz)
+    - observation: downward-facing camera image by default
+    """
+
+    def __init__(
+        self,
+        gui=True,
+        sub_steps=10,
+        sim_time_step=1 / 250,
+        max_track_err=0.3,
+        max_time=60,
+        config=None,
+        randomize=True,
+        obsv_type="down_camera",
+        track=None,
+        track_render_params=None,
+        render_mode=None,
+    ):
+        if config is None:
+            # Load default TurtleBot3 Burger-like configuration shipped with this package.
+            base_dir = os.path.dirname(os.path.dirname(__file__))
+            cfg_path = os.path.join(base_dir, "turtlebot3_burger_config.json")
+            config = RandomizerDict(json.load(open(cfg_path, "r")))
+        super().__init__(
+            gui=gui,
+            nb_cam_pts=8,
+            sub_steps=sub_steps,
+            sim_time_step=sim_time_step,
+            max_track_err=max_track_err,
+            power_limit=1.0,
+            max_time=max_time,
+            config=config,
+            randomize=randomize,
+            obsv_type=obsv_type,
+            track=track,
+            track_render_params=track_render_params,
+            action_mode="cmd_vel",
+            render_mode=render_mode,
+        )
 
 
 if __name__ == '__main__':
