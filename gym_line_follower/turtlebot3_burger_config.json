@@ -1,5 +1,5 @@
 {
-  "robot_urdf": "real_turtlebot3_burger.urdf",
+  "robot_urdf": "turtlebot3_burger.urdf",
 
   "wheel_joint_left_name": "wheel_left_joint",
   "wheel_joint_right_name": "wheel_right_joint",

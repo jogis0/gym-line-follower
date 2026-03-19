@@ -8,11 +8,10 @@
   <!-- Root -->
   <link name="base_link">
     <visual>
-      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <origin xyz="-0.032 0 0.0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.09" length="0.12"/>
+        <mesh filename="meshes/burger_base.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="orange"/>
     </visual>
     <collision>
       <origin xyz="0 0 0.06" rpy="0 0 0"/>
@@ -31,11 +30,10 @@
   <!-- Wheels -->
   <link name="wheel_left_link">
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.033" length="0.018"/>
+        <mesh filename="meshes/left_tire.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
@@ -57,11 +55,10 @@
 
   <link name="wheel_right_link">
     <visual>
-      <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+      <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <cylinder radius="0.033" length="0.018"/>
+        <mesh filename="meshes/right_tire.stl" scale="0.001 0.001 0.001"/>
       </geometry>
-      <material name="black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
