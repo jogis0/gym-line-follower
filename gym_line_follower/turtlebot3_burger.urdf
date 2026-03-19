@@ -12,15 +12,16 @@
       <geometry>
         <mesh filename="meshes/burger_base.stl" scale="0.001 0.001 0.001"/>
       </geometry>
+      <material name="gray"/>
     </visual>
     <collision>
-      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <origin xyz="0 0 0.077" rpy="0 0 0"/>
       <geometry>
         <cylinder radius="0.09" length="0.12"/>
       </geometry>
     </collision>
     <inertial>
-      <origin xyz="0 0 0.06" rpy="0 0 0"/>
+      <origin xyz="0 0 0.077" rpy="0 0 0"/>
       <mass value="1.0"/>
       <!-- Rough inertia for a small cylinder body -->
       <inertia ixx="0.004" ixy="0" ixz="0" iyy="0.004" iyz="0" izz="0.003"/>
@@ -34,6 +35,7 @@
       <geometry>
         <mesh filename="meshes/left_tire.stl" scale="0.001 0.001 0.001"/>
       </geometry>
+      <material name="black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
@@ -59,6 +61,7 @@
       <geometry>
         <mesh filename="meshes/right_tire.stl" scale="0.001 0.001 0.001"/>
       </geometry>
+      <material name="black"/>
     </visual>
     <collision>
       <origin xyz="0 0 0" rpy="1.5708 0 0"/>
