@@ -66,6 +66,7 @@ def main() -> int:
             learning_starts=5_000,
             train_freq=(1, "step"),
             gradient_steps=1,
+            device="auto",
         )
         model.learn(total_timesteps=args.timesteps, progress_bar=True)
         model.save(str(args.model_path))
