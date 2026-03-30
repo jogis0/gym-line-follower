@@ -1,3 +1,4 @@
+import collections
 import os
 import json
 import warnings
@@ -30,7 +31,12 @@ class LineFollowerEnv(gym.Env):
 
     def __init__(self, gui=True, nb_cam_pts=8, sub_steps=10, sim_time_step=1 / 250,
                  max_track_err=0.3, power_limit=0.4, max_time=60, config=None, randomize=True, obsv_type="points_latch",
-                 track=None, track_render_params=None, *, action_mode: str = "wheel_power", render_mode=None):
+                 track=None, track_render_params=None, *, action_mode: str = "wheel_power", render_mode=None,
+                 smooth_steering: bool = False, smooth_steering_k: float = 0.1,
+                 progress_reward: bool = False, progress_reward_k: float = 0.1,
+                 domain_randomize_physics: bool = False,
+                 sensor_noise: float = 0.0,
+                 obs_lag: int = 0):
         """
         Create environment.
         :param gui: True to enable pybullet OpenGL GUI
@@ -54,6 +60,13 @@ class LineFollowerEnv(gym.Env):
         :param track: Optional track instance to use. If none track is generated randomly.
         :param track_render_params: Track render parameters dict.
         :param render_mode: Gymnasium render mode. One of: "human", "gui", "rgb_array", "pov".
+        :param smooth_steering: If True, add penalty R_smooth = -smooth_steering_k * |wz_t - wz_{t-1}|.
+        :param smooth_steering_k: Weight for the steering smoothness penalty.
+        :param progress_reward: If True, replace the constant -0.2 time penalty with a velocity-along-track reward.
+        :param progress_reward_k: Scale factor for the progress reward.
+        :param domain_randomize_physics: If True, randomize wheel lateral friction each episode reset.
+        :param sensor_noise: Std of Gaussian noise added to observations (0 = off).
+        :param obs_lag: Number of frames to delay the returned observation (0 = off).
         """
 
         self.local_dir = os.path.dirname(os.path.dirname(__file__))
@@ -79,6 +92,17 @@ class LineFollowerEnv(gym.Env):
         self.track_render_params = track_render_params
         self.preset_track = track
         self.action_mode = action_mode.lower()
+
+        self.smooth_steering = smooth_steering
+        self.smooth_steering_k = smooth_steering_k
+        self.progress_reward = progress_reward
+        self.progress_reward_k = progress_reward_k
+        self.domain_randomize_physics = domain_randomize_physics
+        self.sensor_noise = sensor_noise
+        self.obs_lag = obs_lag
+
+        self._prev_wz = 0.0
+        self._obs_buffer: collections.deque = collections.deque(maxlen=max(1, obs_lag + 1)) if obs_lag > 0 else None
 
         if self.action_mode == "wheel_power":
             self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(2,), dtype=np.float32)
@@ -148,6 +172,9 @@ class LineFollowerEnv(gym.Env):
         if seed is not None:
             self.seed(seed)
         self.step_counter = 0
+        self._prev_wz = 0.0
+        if self._obs_buffer is not None:
+            self._obs_buffer.clear()
         self.config.randomize()
 
         self.pb_client.resetSimulation()
@@ -173,6 +200,15 @@ class LineFollowerEnv(gym.Env):
         self.follower_bot = LineFollowerBot(self.pb_client, self.nb_cam_pts, self.track.start_xy, start_yaw,
                                             self.config, obsv_type=self.obsv_type, action_mode=self.action_mode)
 
+        if self.domain_randomize_physics:
+            friction = float(self.config.get("wheel_lateral_friction", 1.0))
+            for joint_idx in self.follower_bot.wheel_joint_indices.values():
+                self.pb_client.changeDynamics(
+                    self.follower_bot.bot,
+                    joint_idx,
+                    lateralFriction=friction,
+                )
+
         self.position_on_track = 0.
 
         if self.plot:
@@ -189,11 +225,15 @@ class LineFollowerEnv(gym.Env):
             obsv = self.follower_bot.step(self.track)
             if self.obsv_type == "latch_bool":
                 obsv = [obsv, 1.]
+            if self._obs_buffer is not None:
+                for _ in range(self._obs_buffer.maxlen):
+                    self._obs_buffer.append(obsv)
             info = self._get_info()
             return obsv, info
 
     def step(self, action):
-        action = self.speed_limit * np.array(action)
+        raw_action = np.array(action)
+        action = self.speed_limit * raw_action
 
         if self.done:
             warnings.warn("Calling step() on done environment.")
@@ -240,8 +280,21 @@ class LineFollowerEnv(gym.Env):
             checkpoints_reached = self.track.update_progress(self.position_on_track)
             reward += checkpoints_reached * checkpoint_reward * (1.0 - track_err_norm) ** 2
 
-        # Time penalty
-        reward -= 0.2
+        # Time penalty / progress reward
+        if self.progress_reward:
+            v_progress = self._get_velocity_along_track()
+            reward += self.progress_reward_k * v_progress
+        else:
+            reward -= 0.2
+
+        # Steering smoothness penalty
+        if self.smooth_steering:
+            if self.action_mode == "cmd_vel":
+                wz = float(raw_action[1])
+            else:
+                wz = float(raw_action[1] - raw_action[0])
+            reward -= self.smooth_steering_k * abs(wz - self._prev_wz)
+            self._prev_wz = wz
 
         terminated = False
         truncated = False
@@ -259,6 +312,32 @@ class LineFollowerEnv(gym.Env):
         elif self.step_counter > self.max_steps:
             truncated = True
             print("TIME LIMIT")
+
+        # Sensor noise
+        if self.sensor_noise > 0.0:
+            if self.obsv_type in ("camera", "down_camera"):
+                obs_arr = np.array(observation, dtype=np.int16)
+                obs_arr += np.random.normal(0, self.sensor_noise, obs_arr.shape).astype(np.int16)
+                observation = np.clip(obs_arr, 0, 255).astype(np.uint8)
+            elif self.obsv_type in ("points_visible", "points_latch", "points_latch_bool"):
+                obs_arr = np.array(observation, dtype=np.float32)
+                if self.obsv_type == "points_visible":
+                    pts = obs_arr.reshape(-1, 3)
+                    pts[:, :2] += np.random.normal(0, self.sensor_noise, pts[:, :2].shape).astype(np.float32)
+                    observation = pts.flatten().tolist()
+                elif self.obsv_type == "points_latch":
+                    pts = obs_arr.reshape(-1, 2)
+                    pts += np.random.normal(0, self.sensor_noise, pts.shape).astype(np.float32)
+                    observation = pts.flatten().tolist()
+                elif self.obsv_type == "points_latch_bool":
+                    pts = obs_arr[:-1].reshape(-1, 2)
+                    pts += np.random.normal(0, self.sensor_noise, pts.shape).astype(np.float32)
+                    observation = pts.flatten().tolist() + [obs_arr[-1]]
+
+        # Observation lag
+        if self._obs_buffer is not None:
+            self._obs_buffer.append(observation)
+            observation = self._obs_buffer[0]
 
         info = self._get_info()
         self.step_counter += 1
@@ -393,6 +472,13 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
         track=None,
         track_render_params=None,
         render_mode=None,
+        smooth_steering: bool = False,
+        smooth_steering_k: float = 0.1,
+        progress_reward: bool = False,
+        progress_reward_k: float = 0.1,
+        domain_randomize_physics: bool = False,
+        sensor_noise: float = 0.0,
+        obs_lag: int = 0,
     ):
         if config is None:
             # Load default TurtleBot3 Burger-like configuration shipped with this package.
@@ -414,6 +500,13 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
             track_render_params=track_render_params,
             action_mode="cmd_vel",
             render_mode=render_mode,
+            smooth_steering=smooth_steering,
+            smooth_steering_k=smooth_steering_k,
+            progress_reward=progress_reward,
+            progress_reward_k=progress_reward_k,
+            domain_randomize_physics=domain_randomize_physics,
+            sensor_noise=sensor_noise,
+            obs_lag=obs_lag,
         )
 
 
