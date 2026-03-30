@@ -61,8 +61,8 @@
         <contact>
           <lateral_friction value="0.6"/>
           <rolling_friction value="0.0"/>
-          <stiffness value="30000"/>
-          <damping value="300"/>
+          <stiffness value="300000"/>
+          <damping value="1000"/>
         </contact>
         <inertial>
             <mass value="0.01"/>
@@ -85,8 +85,8 @@
         <contact>
           <lateral_friction value="0.6"/>
           <rolling_friction value="0.0"/>
-          <stiffness value="30000"/>
-          <damping value="300"/>
+          <stiffness value="300000"/>
+          <damping value="1000"/>
         </contact>
         <inertial>
             <mass value="0.01"/>
@@ -109,8 +109,8 @@
         <contact>
           <lateral_friction value="0.0"/>
           <rolling_friction value="0.0"/>
-          <stiffness value="30000"/>
-          <damping value="300"/>
+          <stiffness value="300000"/>
+          <damping value="1000"/>
         </contact>
         <inertial>
             <mass value="0.001"/>
