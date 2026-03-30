@@ -1,12 +1,12 @@
 {
-  "robot_urdf": "turtlebot3_burger.urdf",
+  "robot_urdf": "robot.urdf",
 
   "wheel_joint_left_name": "wheel_left_joint",
   "wheel_joint_right_name": "wheel_right_joint",
 
   "wheel_radius": 0.033,
   "wheel_separation": 0.160,
-  "max_wheel_force": 2.0,
+  "max_wheel_force": 0.5,
   "wheel_lateral_friction": {"default": 1.0, "range": [0.6, 1.4]},
 
   "cmd_vel_vx_limit": 0.22,
@@ -19,7 +19,7 @@
     "near": 0.01,
     "far": 1.5,
     "hz": 25,
-    "pos_in_base": [0.08, 0.0, 0.12],
-    "rpy_in_base": [3.14159, 0.0, 0.0]
+    "pos_in_base": [-0.11, 0.0, 0.15],
+    "rpy_in_base": [0.0, 0.7854, 3.1416]
   }
 }

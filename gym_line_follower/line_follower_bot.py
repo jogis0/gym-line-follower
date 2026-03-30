@@ -70,6 +70,8 @@ class LineFollowerBot:
         self.cam_target_point: ReferencePoint = None  # POV Camera target point
         self.cam_pos_point: ReferencePoint = None  # POC Camera position
 
+        self.cam_indicator = None  # PyBullet body ID for down-camera visual indicator
+
         self.volts = 0.
 
         self.left_motor: DCMotor = None
@@ -132,6 +134,31 @@ class LineFollowerBot:
         )
         self._init_wheel_joints()
         self.pos = xy, yaw
+
+        # Camera visual indicator (down_camera only) — remove old one first, then recreate.
+        if self.cam_indicator is not None:
+            try:
+                self.pb_client.removeBody(self.cam_indicator)
+            except Exception:
+                pass
+            self.cam_indicator = None
+
+        cam_cfg = self.config.get("down_camera")
+        if cam_cfg is not None:
+            pos_in_base = np.asarray(cam_cfg.get("pos_in_base", [0.08, 0.0, 0.12]), dtype=np.float32)
+            base_pos, base_orn = self.pb_client.getBasePositionAndOrientation(self.bot)
+            rot = np.asarray(self.pb_client.getMatrixFromQuaternion(base_orn), dtype=np.float32).reshape(3, 3)
+            cam_world_pos = np.asarray(base_pos, dtype=np.float32) + rot @ pos_in_base
+            vis_shape = self.pb_client.createVisualShape(
+                shapeType=self.pb_client.GEOM_SPHERE,
+                radius=0.015,
+                rgbaColor=[1.0, 0.5, 0.0, 1.0],  # orange
+            )
+            self.cam_indicator = self.pb_client.createMultiBody(
+                baseMass=0,
+                baseVisualShapeIndex=vis_shape,
+                basePosition=cam_world_pos.tolist(),
+            )
 
         # Reference geometry used by point-based observations and legacy POV camera.
         # Provide sane defaults so other render modes don't crash when using different configs.
@@ -199,6 +226,16 @@ class LineFollowerBot:
         self.prev_vel = self.vel
         self.pos = new_xy, new_yaw
         self.vel = self.get_velocity()
+
+        if self.cam_indicator is not None:
+            cam_cfg = self.config.get("down_camera", {})
+            pos_in_base = np.asarray(cam_cfg.get("pos_in_base", [0.08, 0.0, 0.12]), dtype=np.float32)
+            base_pos, base_orn = self.pb_client.getBasePositionAndOrientation(self.bot)
+            rot = np.asarray(self.pb_client.getMatrixFromQuaternion(base_orn), dtype=np.float32).reshape(3, 3)
+            cam_world_pos = np.asarray(base_pos, dtype=np.float32) + rot @ pos_in_base
+            self.pb_client.resetBasePositionAndOrientation(
+                self.cam_indicator, cam_world_pos.tolist(), [0.0, 0.0, 0.0, 1.0]
+            )
 
     def get_velocity(self):
         linear, angular = self.pb_client.getBaseVelocity(self.bot)

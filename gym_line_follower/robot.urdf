@@ -1,0 +1,144 @@
+<robot name="follower">
+
+    <!--Materials-->
+
+    <material name="light_black">
+        <color rgba="0.4 0.4 0.4 1.0"/>
+    </material>
+
+    <material name="dark">
+        <color rgba="0.3 0.3 0.3 1.0"/>
+    </material>
+
+    <!--Links-->
+    <link name="base">
+        <inertial>
+            <mass value="1e-6"/>
+            <inertia ixx="0.0" ixy="0.0" ixz="0.0" iyy="0.0" iyz="0.0" izz="0.0"/>
+        </inertial>
+    </link>
+
+    <link name="chassis">
+        <visual>
+            <origin xyz="-0.032 0 0.0" rpy="0 0 0"/>
+            <geometry>
+                <mesh filename="meshes/burger_base.stl" scale="0.001 0.001 0.001"/>
+            </geometry>
+            <material name="light_black"/>
+        </visual>
+        <collision>
+            <origin xyz="-0.032 0 0.070" rpy="0 0 0"/>
+            <geometry>
+                <box size="0.140 0.140 0.143"/>
+            </geometry>
+        </collision>
+        <inertial>
+            <origin xyz="0 0 0" rpy="0 0 0"/>
+            <mass value="8.2573504e-01"/>
+            <inertia ixx="2.2124416e-03" ixy="-1.2294101e-05" ixz="3.4938785e-05"
+                     iyy="2.1193702e-03" iyz="-5.0120904e-06" izz="2.0064271e-03"/>
+        </inertial>
+    </link>
+
+    <link name="left_wheel">
+        <visual>
+            <origin xyz="0 0 0" rpy="-1.5708 0 0"/>
+            <geometry>
+                <mesh filename="meshes/left_tire.stl" scale="0.001 0.001 0.001"/>
+            </geometry>
+            <material name="dark"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.018" radius="0.033"/>
+            </geometry>
+        </collision>
+        <contact>
+          <lateral_friction value="1.0"/>
+          <rolling_friction value="0.0"/>
+          <stiffness value="30000"/>
+          <damping value="300"/>
+        </contact>
+        <inertial>
+            <origin xyz="0 0 0"/>
+            <mass value="2.8498940e-02"/>
+            <inertia ixx="1.1175580e-05" ixy="-4.2369783e-11" ixz="-5.9381719e-09"
+                     iyy="1.1192413e-05" iyz="-1.4400107e-11" izz="2.0712558e-05"/>
+        </inertial>
+    </link>
+
+    <link name="right_wheel">
+        <visual>
+            <origin xyz="0 0 0" rpy="1.5708 0 0"/>
+            <geometry>
+                <mesh filename="meshes/right_tire.stl" scale="0.001 0.001 0.001"/>
+            </geometry>
+            <material name="dark"/>
+        </visual>
+        <collision>
+            <geometry>
+                <cylinder length="0.018" radius="0.033"/>
+            </geometry>
+        </collision>
+        <contact>
+          <lateral_friction value="1.0"/>
+          <rolling_friction value="0.0"/>
+          <stiffness value="30000"/>
+          <damping value="300"/>
+        </contact>
+        <inertial>
+            <origin xyz="0 0 0"/>
+            <mass value="2.8498940e-02"/>
+            <inertia ixx="1.1175580e-05" ixy="-4.2369783e-11" ixz="-5.9381719e-09"
+                     iyy="1.1192413e-05" iyz="-1.4400107e-11" izz="2.0712558e-05"/>
+        </inertial>
+    </link>
+
+    <link name="caster">
+        <collision>
+            <origin xyz="0 0.001 0"/>
+            <geometry>
+                <box size="0.030 0.009 0.020"/>
+            </geometry>
+        </collision>
+        <contact>
+          <lateral_friction value="0.0"/>
+          <rolling_friction value="0.0"/>
+          <stiffness value="30000"/>
+          <damping value="300"/>
+        </contact>
+        <inertial>
+            <mass value="0.005"/>
+            <inertia ixx="0.001" ixy="0.0" ixz="0.0" iyy="0.001" iyz="0.0" izz="0.001"/>
+        </inertial>
+    </link>
+
+
+    <!--Joints-->
+    <joint name="base_to_chassis" type="fixed">
+        <parent link="base"/>
+        <child link="chassis"/>
+        <origin rpy="0 0 0" xyz="0.0 0.0 0.010"/>
+    </joint>
+
+    <joint name="wheel_left_joint" type="continuous">
+        <parent link="chassis"/>
+        <child link="left_wheel"/>
+        <origin rpy="1.5708 0 0" xyz="0.0 0.08 0.023"/>
+        <axis xyz="0 0 1"/>
+    </joint>
+
+    <joint name="wheel_right_joint" type="continuous">
+        <parent link="chassis"/>
+        <child link="right_wheel"/>
+        <origin rpy="-1.5708 0 0" xyz="0.0 -0.08 0.023"/>
+        <axis xyz="0 0 -1"/>
+    </joint>
+
+    <joint name="chassis_to_caster" type="fixed">
+        <parent link="chassis"/>
+        <child link="caster"/>
+        <origin rpy="-1.5708 0 0" xyz="-0.081 0 -0.004"/>
+    </joint>
+
+</robot>

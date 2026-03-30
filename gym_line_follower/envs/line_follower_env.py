@@ -146,7 +146,7 @@ class LineFollowerEnv(gym.Env):
             self.observation_space = spaces.Box(low=0, high=255, shape=(h, w, 3), dtype=np.uint8)
 
         self.pb_client: p = BulletClient(connection_mode=p.GUI if self.gui else p.DIRECT)
-        self.pb_client.setPhysicsEngineParameter(enableFileCaching=0)
+        self.pb_client.setPhysicsEngineParameter(enableFileCaching=0, numSolverIterations=100)
         p.resetDebugVisualizerCamera(cameraDistance=2.6, cameraYaw=45, cameraPitch=-45, cameraTargetPosition=[0, 0, 0])
         p.configureDebugVisualizer(p.COV_ENABLE_GUI, 0)
 
@@ -199,6 +199,8 @@ class LineFollowerEnv(gym.Env):
         self.pb_client.loadURDF(os.path.join(self.local_dir, "track_plane.urdf"))
         self.follower_bot = LineFollowerBot(self.pb_client, self.nb_cam_pts, self.track.start_xy, start_yaw,
                                             self.config, obsv_type=self.obsv_type, action_mode=self.action_mode)
+
+        self.pb_client.changeDynamics(self.follower_bot.bot, -1, linearDamping=0.1, angularDamping=0.5)
 
         if self.domain_randomize_physics:
             friction = float(self.config.get("wheel_lateral_friction", 1.0))

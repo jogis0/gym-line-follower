@@ -16,6 +16,10 @@ def make_env(*, seed: int, gui: bool) -> gym.Env:
         gui=gui,
         randomize=True,
         obsv_type="down_camera",
+        progress_reward=True,
+        progress_reward_k=1.0,
+        smooth_steering=True,
+        smooth_steering_k=0.05,
     )
     env.reset(seed=seed)
     env = gym.wrappers.RecordEpisodeStatistics(env)
