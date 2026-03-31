@@ -40,6 +40,7 @@ def main() -> int:
         parser.error("Choose one: --train or --eval")
 
     from stable_baselines3 import DDPG
+    from stable_baselines3.common.callbacks import CheckpointCallback
     from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.noise import NormalActionNoise
     from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecTransposeImage
@@ -72,7 +73,8 @@ def main() -> int:
             gradient_steps=1,
             device="auto",
         )
-        model.learn(total_timesteps=args.timesteps, progress_bar=True)
+        checkpoint_callback = CheckpointCallback(save_freq=100_000, save_path=str(args.model_path.parent), name_prefix="ddpg_turtlebot3")
+        model.learn(total_timesteps=args.timesteps, progress_bar=True, callback=checkpoint_callback)
         model.save(str(args.model_path))
 
     if args.eval:

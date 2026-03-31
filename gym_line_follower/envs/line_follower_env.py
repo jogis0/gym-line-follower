@@ -286,6 +286,8 @@ class LineFollowerEnv(gym.Env):
         if self.progress_reward:
             v_progress = self._get_velocity_along_track()
             reward += self.progress_reward_k * v_progress
+            if v_progress < 0.02:
+                reward -= 0.1   # constant penalty when not making forward progress
         else:
             reward -= 0.2
 
