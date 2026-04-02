@@ -19,6 +19,8 @@ def make_env(*, seed: int, gui: bool) -> gym.Env:
         progress_reward_k=2.0,
         smooth_steering=True,
         smooth_steering_k=0.05,
+        domain_randomize_physics=True,
+        sensor_noise=0.005,
     )
     env.reset(seed=seed)
 

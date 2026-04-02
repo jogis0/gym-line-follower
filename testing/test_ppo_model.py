@@ -9,6 +9,11 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
+from metrics import run_eval
+
+LOG_DIR = Path(__file__).parent / "logs"
+SMOOTH_STEERING_K = 0.05  # must match the value used during training
+
 
 def main():
     parser = argparse.ArgumentParser(description="Test a trained PPO model on the TurtleBot3 line follower.")
@@ -37,7 +42,7 @@ def main():
             progress_reward=True,
             progress_reward_k=2.0,
             smooth_steering=True,
-            smooth_steering_k=0.05,
+            smooth_steering_k=SMOOTH_STEERING_K,
         )
         obs_space = env.observation_space
         if isinstance(obs_space, gym.spaces.Box):
@@ -64,22 +69,15 @@ def main():
     model = PPO.load(str(args.model_path), env=venv)
     print(f"Loaded model from {args.model_path}")
 
-    for episode in range(1, args.episodes + 1):
-        obs = venv.reset()
-        done = False
-        total_reward = 0.0
-        steps = 0
-
-        while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, dones, infos = venv.step(action)
-            total_reward += float(reward[0])
-            steps += 1
-            done = bool(dones[0])
-
-        ep_info = infos[0].get("episode", {})
-        print(f"Episode {episode}/{args.episodes} — steps: {steps}, reward: {total_reward:.2f}"
-              + (f", ep_len: {ep_info.get('l', '?')}" if ep_info else ""))
+    run_eval(
+        venv,
+        model,
+        n_episodes=args.episodes,
+        log_dir=LOG_DIR,
+        prefix="ppo_turtlebot3",
+        smooth_steering_k=SMOOTH_STEERING_K,
+        model_path=str(args.model_path),
+    )
 
     venv.close()
 

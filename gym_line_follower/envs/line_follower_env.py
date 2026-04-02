@@ -89,7 +89,13 @@ class LineFollowerEnv(gym.Env):
 
         self.randomize = randomize
         self.obsv_type = obsv_type.lower()
-        self.track_render_params = track_render_params
+        # Auto-load track render config from disk when randomizing and no override was supplied.
+        # This enables per-episode variance in line width, color, background texture, etc.
+        if track_render_params is None and randomize:
+            render_cfg_path = os.path.join(self.local_dir, "track_render_config.json")
+            self.track_render_params = RandomizerDict(json.load(open(render_cfg_path, "r")))
+        else:
+            self.track_render_params = track_render_params
         self.preset_track = track
         self.action_mode = action_mode.lower()
 

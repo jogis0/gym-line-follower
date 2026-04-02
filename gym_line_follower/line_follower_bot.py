@@ -333,9 +333,17 @@ class LineFollowerBot:
 
         - wheel_power: action = (left_power, right_power) in [-1, 1] (legacy)
         - cmd_vel: action = (vx, wz) in [m/s, rad/s]
+
+        motor_noise_std (from config) adds Gaussian noise scaled to the command magnitude,
+        simulating actuator uncertainty for sim-to-real transfer.
         """
+        motor_noise_std = float(self.config.get("motor_noise_std", 0.0))
+
         if self.action_mode == "wheel_power":
             l_volts, r_volts = self._power_to_volts(*action)
+            if motor_noise_std > 0.0:
+                l_volts += np.random.normal(0.0, motor_noise_std * self.volts)
+                r_volts += np.random.normal(0.0, motor_noise_std * self.volts)
             l_vel, r_vel = self._get_wheel_velocity()
             l_vel *= MOTOR_DIRECTIONS["left"]
             r_vel *= MOTOR_DIRECTIONS["right"]
@@ -346,6 +354,11 @@ class LineFollowerBot:
 
         if self.action_mode == "cmd_vel":
             vx, wz = float(action[0]), float(action[1])
+            if motor_noise_std > 0.0:
+                vx_lim = float(self.config.get("cmd_vel_vx_limit", 0.22))
+                wz_lim = float(self.config.get("cmd_vel_wz_limit", 2.84))
+                vx += np.random.normal(0.0, motor_noise_std * vx_lim)
+                wz += np.random.normal(0.0, motor_noise_std * wz_lim)
             r = float(self.config.get("wheel_radius", 0.033))
             L = float(self.config.get("wheel_separation", 0.16))
             max_force = float(self.config.get("max_wheel_force", 2.0))

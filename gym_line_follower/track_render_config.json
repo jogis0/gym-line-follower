@@ -5,8 +5,8 @@
                  "choice": ["wood", "wood_2", "concrete", "brick", "checkerboard", "white", "gray"]},
   "line_opacity": {"default": 0.8,
                    "range": [0.6, 1.0]},
-  "line_thickness": {"default": 0.015,
-                     "range": [0.010, 0.020]},
+  "line_thickness": {"default": 0.030,
+                     "range": [0.020, 0.060]},
   "dashed": {"default": false,
              "choice": [false]}
 }

@@ -11,6 +11,7 @@
 
   "cmd_vel_vx_limit": 0.22,
   "cmd_vel_wz_limit": 2.84,
+  "motor_noise_std": {"default": 0.02, "range": [0.01, 0.04]},
 
   "down_camera": {
     "width": 160,
