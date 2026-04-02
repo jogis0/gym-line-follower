@@ -1,2 +1,9 @@
 *.generated*
 *.cpython-*
+events.out.tfevents.*
+CLAUDE.md
+architectural_patterns.md
+ddpg_turtlebot3.zip
+ppo_turtlebot3.zip
+ppo_turtlebot3_*
+0_VRDemoSettings.txt
