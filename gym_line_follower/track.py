@@ -50,9 +50,13 @@ class Segment:
 
 
 def get_curve(points, **kw):
+    per_vertex_r = kw.pop("per_vertex_r", None)
     segments = []
     for i in range(len(points) - 1):
-        seg = Segment(points[i, :2], points[i + 1, :2], points[i, 2], points[i + 1, 2], **kw)
+        seg_kw = dict(kw)
+        if per_vertex_r is not None:
+            seg_kw["r"] = float(per_vertex_r[i % len(per_vertex_r)])
+        seg = Segment(points[i, :2], points[i + 1, :2], points[i, 2], points[i + 1, 2], **seg_kw)
         segments.append(seg)
     curve = np.concatenate([s.curve for s in segments])
     return segments, curve
@@ -64,15 +68,18 @@ def ccw_sort(p):
     return p[np.argsort(s), :]
 
 
-def get_bezier_curve(a, rad=0.2, edgy=0):
+def get_bezier_curve(a, rad=0.2, edgy=0, sharp_corner_prob=0.0):
     """ given an array of points *a*, create a curve through
     those points.
     *rad* is a number between 0 and 1 to steer the distance of
           control points.
     *edgy* is a parameter which controls how "edgy" the curve is,
-           edgy=0 is smoothest."""
+           edgy=0 is smoothest.
+    *sharp_corner_prob* is the probability [0,1] for each vertex to
+           become a sharp corner (small control-point radius)."""
     p = np.arctan(edgy) / np.pi + .5
     a = ccw_sort(a)
+    n_verts = len(a)
     a = np.append(a, np.atleast_2d(a[0, :]), axis=0)
     d = np.diff(a, axis=0)
     ang = np.arctan2(d[:, 1], d[:, 0])
@@ -83,7 +90,16 @@ def get_bezier_curve(a, rad=0.2, edgy=0):
     ang = p * ang1 + (1 - p) * ang2 + (np.abs(ang2 - ang1) > np.pi) * np.pi
     ang = np.append(ang, [ang[0]])
     a = np.append(a, np.atleast_2d(ang).T, axis=1)
-    s, c = get_curve(a, r=rad, method="var")
+
+    per_vertex_r = None
+    if sharp_corner_prob > 0.0:
+        per_vertex_r = np.where(
+            np.random.random(n_verts) < sharp_corner_prob,
+            0.03,   # sharp / tight corner
+            rad,    # smooth corner
+        )
+
+    s, c = get_curve(a, r=rad, method="var", per_vertex_r=per_vertex_r)
     x, y = c.T
     return x, y, a
 
@@ -170,6 +186,8 @@ class Track:
         self.next_checkpoint_idx = 0
         self.done = False
 
+        self._setup_features()
+
     @classmethod
     def generate(cls, approx_width=1., hw_ratio=0.5, seed=None, irregularity=0.2,
                  spikeyness=0.2, num_verts=10, *args, **kwargs):
@@ -181,6 +199,17 @@ class Track:
         :param seed: seed for random generator
         :return: Track instance
         """
+        # Extract generation params from render_params when provided
+        render_params = kwargs.get("render_params", None)
+        sharp_corner_prob = 0.0
+        if render_params is not None:
+            nv = render_params.get("num_verts", None)
+            if nv is not None:
+                num_verts = int(round(float(nv)))
+            scp = render_params.get("sharp_corner_prob", None)
+            if scp is not None:
+                sharp_corner_prob = float(scp)
+
         # Generate random points
         random.seed(seed)
         upscale = 1000.  # upscale so curve gen fun works
@@ -189,7 +218,7 @@ class Track:
         pts = np.array(pts)
 
         # Generate curve with points
-        x, y, _ = get_bezier_curve(pts, rad=0.2, edgy=0)
+        x, y, _ = get_bezier_curve(pts, rad=0.2, edgy=0, sharp_corner_prob=sharp_corner_prob)
         # Remove duplicated point
         x = x[:-1]
         y = y[:-1]
@@ -220,21 +249,137 @@ class Track:
         points.append(points[0])  # Close the loop
         points = interpolate_points(points, 1000)
         return cls(points, *args, **kwargs)
-    
+
+    # ------------------------------------------------------------------
+    # Feature geometry helpers (dead ends, crossings, gaps, width)
+    # ------------------------------------------------------------------
+
+    def _setup_features(self):
+        """Compute and cache all per-episode track features from render_params."""
+        self.dead_ends = []
+        self.crossings = []
+        self.gap_mask = np.zeros(max(0, len(self.pts) - 1), dtype=bool)
+        self.width_schedule = []
+
+        rp = self.render_params
+        if rp is None:
+            return
+
+        rng = np.random.default_rng()
+
+        if rp.get("dead_ends_enabled", False):
+            n = int(round(float(rp.get("num_dead_ends", 3))))
+            length = float(rp.get("dead_end_length", 0.08))
+            self.dead_ends = self._generate_dead_ends(n, length, rng)
+
+        if rp.get("crossings_enabled", False):
+            n = int(round(float(rp.get("num_crossings", 2))))
+            length = float(rp.get("crossing_length", 0.10))
+            self.crossings = self._generate_crossings(n, length, rng)
+
+        if rp.get("gaps_enabled", False):
+            n = int(round(float(rp.get("num_gaps", 2))))
+            gap_length = float(rp.get("gap_length", 0.04))
+            self.gap_mask = self._generate_gap_mask(n, gap_length, rng)
+
+        if rp.get("variable_line_width", False):
+            n_segs = int(round(float(rp.get("num_width_segments", 8))))
+            base_thickness = float(rp.get("line_thickness", 0.030))
+            self.width_schedule = self._generate_width_schedule(n_segs, base_thickness, rng)
+
+    def _generate_dead_ends(self, n, length, rng):
+        """Short stubs branching off the main track at random positions."""
+        result = []
+        n_pts = len(self.pts)
+        margin = max(1, n_pts // 10)
+        avail = n_pts - 2 * margin
+        if avail <= 0:
+            return result
+        indices = rng.choice(np.arange(margin, n_pts - margin), size=min(n, avail), replace=False)
+        for idx in indices:
+            tangent = self.vector_at_index(int(idx))
+            perp = np.array([-tangent[1], tangent[0]])
+            side = rng.choice([-1.0, 1.0])
+            stub_len = length * rng.uniform(0.5, 1.0)
+            p1 = self.pts[idx].copy()
+            p2 = p1 + side * perp * stub_len
+            result.append((p1, p2))
+        return result
+
+    def _generate_crossings(self, n, length, rng):
+        """Lines that cross perpendicularly through the track (T/X junctions)."""
+        result = []
+        n_pts = len(self.pts)
+        margin = max(1, n_pts // 10)
+        avail = n_pts - 2 * margin
+        if avail <= 0:
+            return result
+        indices = rng.choice(np.arange(margin, n_pts - margin), size=min(n, avail), replace=False)
+        for idx in indices:
+            tangent = self.vector_at_index(int(idx))
+            perp = np.array([-tangent[1], tangent[0]])
+            half = length * rng.uniform(0.4, 0.6)
+            center = self.pts[idx].copy()
+            p1 = center - perp * half
+            p2 = center + perp * (length - half)
+            result.append((p1, p2))
+        return result
+
+    def _generate_gap_mask(self, n, gap_length_m, rng):
+        """Boolean mask over segments: True = skip drawing (gap in line)."""
+        n_pts = len(self.pts)
+        mask = np.zeros(max(0, n_pts - 1), dtype=bool)
+        if n_pts < 3:
+            return mask
+        margin = max(1, n_pts // 10)
+        gap_pts = max(1, int(gap_length_m / 3e-3))
+        upper = n_pts - margin - gap_pts
+        if upper <= margin:
+            return mask
+        candidates = np.arange(margin, upper)
+        size = min(n, len(candidates))
+        starts = rng.choice(candidates, size=size, replace=False)
+        for s in starts:
+            end = min(int(s) + gap_pts, n_pts - 1)
+            mask[int(s):end] = True
+        return mask
+
+    def _generate_width_schedule(self, n_segments, base_thickness, rng):
+        """List of (start_idx, width_meters) giving abrupt width changes along the track."""
+        n_pts = len(self.pts)
+        boundaries = np.linspace(0, n_pts, n_segments + 1, dtype=int)
+        result = []
+        for i in range(n_segments):
+            w = rng.uniform(0.020, 0.060)
+            result.append((int(boundaries[i]), w))
+        return result
+
+    # ------------------------------------------------------------------
+    # Rendering
+    # ------------------------------------------------------------------
+
     def _render(self, w=3., h=2., ppm=1500, line_thickness=0.015, save=None, line_color="black",
-                background="white", line_opacity=0.8, dashed=False):
+                background="white", line_opacity=0.8, dashed=False,
+                variable_line_width=False,
+                line_noise_enabled=False, line_noise_intensity=0.3,
+                line_opacity_variation=0.0,
+                **kwargs):
         """
         Render track using open-cv
         :param w: canvas width in meters
         :param h: canvas height in meters
         :param ppm: pixel per meter
-        :param line_thickness: line thickness in meters
+        :param line_thickness: line thickness in meters (base value; overridden per-segment when variable_line_width)
         :param save: path to save
         :param line_color: string or BGR tuple
                            options: [black, red, green, blue]
         :param background: string or BGR tuple
                            options: [wood, wood_2, concrete, brick, checkerboard, white, gray]
         :param line_opacity: opacity of line in range 0, 1 where 0 is fully transparent
+        :param variable_line_width: use per-section width variation (precomputed in self.width_schedule)
+        :param line_noise_enabled: apply noise / dead-pixel effects to the rendered line
+        :param line_noise_intensity: noise strength in [0, 1]
+        :param line_opacity_variation: smooth per-area opacity jitter in [0, 1]
         :return: rendered track image array
         """
         import cv2
@@ -297,6 +442,24 @@ class Track:
 
         line = bg.copy()
 
+        # Build per-segment thickness (pixels) array for variable-width mode
+        gap_mask = getattr(self, "gap_mask", np.zeros(max(0, len(self.pts) - 1), dtype=bool))
+        width_schedule = getattr(self, "width_schedule", [])
+
+        if variable_line_width and width_schedule:
+            n_segs = max(0, len(self.pts) - 1)
+            seg_thickness = np.full(n_segs, t_res, dtype=int)
+            for j, (start_idx, width_m) in enumerate(width_schedule):
+                end_idx = width_schedule[j + 1][0] if j + 1 < len(width_schedule) else n_segs
+                seg_thickness[start_idx:end_idx] = max(1, int(round(width_m * ppm)))
+        else:
+            seg_thickness = None
+
+        def _world_to_img(x, y):
+            xi = int(round((x + w / 2) * ppm))
+            yi = int(round(h_res - (y + h / 2) * ppm))
+            return xi, yi
+
         if dashed:
             pts = interpolate_points(self.pts, 1000)
             n = self.length / dashed
@@ -304,30 +467,68 @@ class Track:
             for c in chunks:
                 for i in range(len(c) - 1):
                     x1, y1 = c[i]
-                    x1_img = int(round((x1 + w / 2) * ppm, ndigits=0))
-                    y1_img = int(round(h_res - (y1 + h / 2) * ppm, ndigits=0))
-
                     x2, y2 = c[i + 1]
-                    x2_img = int(round((x2 + w / 2) * ppm, ndigits=0))
-                    y2_img = int(round(h_res - (y2 + h / 2) * ppm, ndigits=0))
-
-                    cv2.line(line, (x1_img, y1_img), (x2_img, y2_img), color=line_bgr, thickness=t_res,
-                             lineType=cv2.LINE_AA)
+                    cv2.line(line, _world_to_img(x1, y1), _world_to_img(x2, y2),
+                             color=line_bgr, thickness=t_res, lineType=cv2.LINE_AA)
         else:
             for i in range(len(self.pts) - 1):
+                if gap_mask[i]:
+                    continue
                 x1, y1 = self.pts[i]
-                x1_img = int(round((x1 + w / 2) * ppm, ndigits=0))
-                y1_img = int(round(h_res - (y1 + h / 2) * ppm, ndigits=0))
-
                 x2, y2 = self.pts[i + 1]
-                x2_img = int(round((x2 + w / 2) * ppm, ndigits=0))
-                y2_img = int(round(h_res - (y2 + h / 2) * ppm, ndigits=0))
+                thickness = int(seg_thickness[i]) if seg_thickness is not None else t_res
+                cv2.line(line, _world_to_img(x1, y1), _world_to_img(x2, y2),
+                         color=line_bgr, thickness=thickness, lineType=cv2.LINE_AA)
 
-                cv2.line(line, (x1_img, y1_img), (x2_img, y2_img), color=line_bgr, thickness=t_res,
-                         lineType=cv2.LINE_AA)
+        # Draw dead ends (one-sided stubs)
+        for p1, p2 in getattr(self, "dead_ends", []):
+            cv2.line(line, _world_to_img(p1[0], p1[1]), _world_to_img(p2[0], p2[1]),
+                     color=line_bgr, thickness=t_res, lineType=cv2.LINE_AA)
 
+        # Draw crossings (perpendicular lines through the track)
+        for p1, p2 in getattr(self, "crossings", []):
+            cv2.line(line, _world_to_img(p1[0], p1[1]), _world_to_img(p2[0], p2[1]),
+                     color=line_bgr, thickness=t_res, lineType=cv2.LINE_AA)
+
+        # Composite line onto background — with optional smooth opacity variation
         alpha = line_opacity
-        out = cv2.addWeighted(line, alpha, bg, 1 - alpha, 0)
+        if line_opacity_variation > 0:
+            small_h = max(1, h_res // 50)
+            small_w = max(1, w_res // 50)
+            small_noise = np.random.uniform(-line_opacity_variation, line_opacity_variation,
+                                            (small_h, small_w)).astype(np.float32)
+            alpha_map = np.clip(
+                alpha + cv2.resize(small_noise, (w_res, h_res), interpolation=cv2.INTER_LINEAR),
+                0.2, 1.0
+            )
+            alpha3 = alpha_map[:, :, np.newaxis]
+            out = np.clip(
+                line.astype(np.float32) * alpha3 + bg.astype(np.float32) * (1.0 - alpha3),
+                0, 255
+            ).astype(np.uint8)
+        else:
+            out = cv2.addWeighted(line, alpha, bg, 1 - alpha, 0)
+
+        # Line noise / texture post-processing
+        if line_noise_enabled and line_noise_intensity > 0:
+            intensity = float(line_noise_intensity)
+
+            # Gaussian noise across the whole image
+            gaussian = np.random.normal(0, intensity * 18.0, out.shape)
+            out = np.clip(out.astype(np.int16) + gaussian.astype(np.int16), 0, 255).astype(np.uint8)
+
+            # Dead-pixel / blotch effect: blank small patches within the line area
+            line_diff = np.max(np.abs(line.astype(np.int16) - bg.astype(np.int16)), axis=2)
+            line_pixel_mask = line_diff > 15
+            ys, xs = np.where(line_pixel_mask)
+            if len(ys) > 0:
+                n_patches = max(1, int(intensity * 40))
+                patch_indices = np.random.randint(0, len(ys), size=n_patches)
+                for pi in patch_indices:
+                    cy, cx = int(ys[pi]), int(xs[pi])
+                    r_px = np.random.randint(1, max(2, int(intensity * 8) + 1))
+                    bg_color = tuple(int(bg[cy, cx, c]) for c in range(3))
+                    cv2.circle(out, (cx, cy), r_px, bg_color, -1)
 
         if save is not None:
             cv2.imwrite(save, out)
@@ -525,4 +726,3 @@ if __name__ == '__main__':
     # plt.tight_layout()
     plt.savefig("track_generator.png", dpi=300)
     plt.show()
-
