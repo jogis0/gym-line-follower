@@ -1,12 +1,12 @@
 {
-  "line_color": {"default": "black",
-                 "choice": ["black", "red", "green", "blue"]},
-  "background": {"default": "white",
-                 "choice": ["wood", "wood_2", "concrete", "brick", "checkerboard", "white", "gray"]},
+  "line_color": {"default": "white",
+                 "choice": ["white"]},
+  "background": {"default": "foam_dark",
+                 "choice": ["foam_dark", "black"]},
   "line_opacity": {"default": 0.8,
                    "range": [0.6, 1.0]},
-  "line_thickness": {"default": 0.030,
-                     "range": [0.020, 0.060]},
+  "line_thickness": {"default": 0.024,
+                     "range": [0.018, 0.030]},
   "dashed": {"default": false,
              "choice": [false]},
 

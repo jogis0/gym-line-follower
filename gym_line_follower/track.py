@@ -372,9 +372,9 @@ class Track:
         :param line_thickness: line thickness in meters (base value; overridden per-segment when variable_line_width)
         :param save: path to save
         :param line_color: string or BGR tuple
-                           options: [black, red, green, blue]
+                           options: [black, red, green, blue, white]
         :param background: string or BGR tuple
-                           options: [wood, wood_2, concrete, brick, checkerboard, white, gray]
+                           options: [wood, wood_2, concrete, brick, checkerboard, white, gray, black, foam_dark]
         :param line_opacity: opacity of line in range 0, 1 where 0 is fully transparent
         :param variable_line_width: use per-section width variation (precomputed in self.width_schedule)
         :param line_noise_enabled: apply noise / dead-pixel effects to the rendered line
@@ -404,6 +404,12 @@ class Track:
                 background_bgr = (255, 255, 255)
             elif background == "gray":
                 background_bgr = (150, 150, 150)
+            elif background == "black":
+                background_bgr = (20, 20, 20)
+            elif background == "foam_dark":
+                base = np.full((h_res, w_res, 3), 20, dtype=np.float32)
+                noise = np.random.normal(0, 15, (h_res, w_res, 3))
+                bg = np.clip(base + noise, 0, 255).astype(np.uint8)
             else:
                 raise ValueError("Invalid background string.")
 
@@ -433,6 +439,8 @@ class Track:
                 line_bgr = (0, 128, 0)
             elif line_color == "blue":
                 line_bgr = (255, 0, 0)
+            elif line_color == "white":
+                line_bgr = (255, 255, 255)
             else:
                 raise ValueError("Invalid color string.")
         elif isinstance(line_color, tuple):

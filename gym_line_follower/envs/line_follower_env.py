@@ -36,7 +36,8 @@ class LineFollowerEnv(gym.Env):
                  progress_reward: bool = False, progress_reward_k: float = 0.1,
                  domain_randomize_physics: bool = False,
                  sensor_noise: float = 0.0,
-                 obs_lag: int = 0):
+                 obs_lag: int = 0,
+                 vx_min: float = 0.0):
         """
         Create environment.
         :param gui: True to enable pybullet OpenGL GUI
@@ -106,6 +107,7 @@ class LineFollowerEnv(gym.Env):
         self.domain_randomize_physics = domain_randomize_physics
         self.sensor_noise = sensor_noise
         self.obs_lag = obs_lag
+        self.vx_min = vx_min
 
         self._prev_wz = 0.0
         self._obs_buffer: collections.deque = collections.deque(maxlen=max(1, obs_lag + 1)) if obs_lag > 0 else None
@@ -242,6 +244,9 @@ class LineFollowerEnv(gym.Env):
 
     def step(self, action):
         raw_action = np.array(action)
+        if self.action_mode == "cmd_vel" and self.vx_min > 0.0:
+            raw_action = raw_action.copy()
+            raw_action[0] = max(self.vx_min, float(raw_action[0]))
         action = self.speed_limit * raw_action
 
         if self.done:
@@ -490,6 +495,7 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
         domain_randomize_physics: bool = False,
         sensor_noise: float = 0.0,
         obs_lag: int = 0,
+        vx_min: float = 0.0,
     ):
         if config is None:
             # Load default TurtleBot3 Burger-like configuration shipped with this package.
@@ -518,6 +524,7 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
             domain_randomize_physics=domain_randomize_physics,
             sensor_noise=sensor_noise,
             obs_lag=obs_lag,
+            vx_min=vx_min,
         )
 
 

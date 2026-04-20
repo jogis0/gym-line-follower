@@ -2,28 +2,24 @@ import argparse
 from pathlib import Path
 
 import gymnasium as gym
-import numpy as np
 import gym_line_follower
 import matplotlib.pyplot as plt
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
+from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor
 
 SMOOTH_STEERING_K = 0.05
 
 
 def main():
     parser = argparse.ArgumentParser(description="Run a trained PPO model with live camera display.")
-    parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_200000_steps.zip")
-    parser.add_argument("--vecnorm-path", type=Path, default=Path("models") / "ppo_turtlebot3_vecnorm.pkl")
+    parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_400000_steps.zip")
     parser.add_argument("--no-gui", action="store_true", help="Disable PyBullet GUI window.")
     args = parser.parse_args()
 
     if not args.model_path.exists():
         raise FileNotFoundError(f"Model not found at {args.model_path}.")
-    if not args.vecnorm_path.exists():
-        raise FileNotFoundError(f"VecNormalize stats not found at {args.vecnorm_path}.")
 
     gui = not args.no_gui
 
@@ -32,32 +28,20 @@ def main():
             "TurtleBot3LineFollower-v0",
             gui=gui,
             randomize=True,
-            obsv_type="points_latch",
+            obsv_type="down_camera",
+            vx_min=0.0,
             progress_reward=True,
             progress_reward_k=2.0,
             smooth_steering=True,
             smooth_steering_k=SMOOTH_STEERING_K,
+            domain_randomize_physics=True,
+            sensor_noise=0.0,
         )
-        obs_space = env.observation_space
-        if isinstance(obs_space, gym.spaces.Box):
-            obs_space = gym.spaces.Box(
-                low=np.asarray(obs_space.low, dtype=np.float32),
-                high=np.asarray(obs_space.high, dtype=np.float32),
-                shape=obs_space.shape,
-                dtype=np.float32,
-            )
-        env = gym.wrappers.TransformObservation(
-            env,
-            lambda obs: np.asarray(obs, dtype=np.float32),
-            observation_space=obs_space,
-        )
+        env = gym.wrappers.GrayscaleObservation(env, keep_dim=True)
         env = Monitor(env)
         return env
 
     venv = DummyVecEnv([_make])
-    venv = VecNormalize.load(str(args.vecnorm_path), venv)
-    venv.training = False
-    venv.norm_reward = False
     venv = VecMonitor(venv)
 
     model = PPO.load(str(args.model_path), env=venv)
