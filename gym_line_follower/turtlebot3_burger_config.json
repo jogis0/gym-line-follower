@@ -20,11 +20,13 @@
   "down_camera": {
     "width": 160,
     "height": 120,
-    "fov": 90,
+    "fov": 50,
     "near": 0.01,
     "far": 1.5,
     "hz": 25,
-    "pos_in_base": [-0.11, 0.0, 0.18],
-    "rpy_in_base": [0.0, 0.7854, 3.1416]
+    "pos_in_base": [-0.13, 0.0, 0.18],
+    "rpy_in_base": [0.0, 1.5707, 3.1416],
+    "distortion_k1": 0.1,
+    "distortion_k2": 0.0
   }
 }

@@ -1,6 +1,7 @@
 from typing import Optional
 import os
 
+import cv2
 import numpy as np
 import pybullet as p
 
@@ -414,11 +415,39 @@ class LineFollowerBot:
         rgb = rgb[:, :, :3]
         return rgb
 
+    def _build_down_cam_distort_map(self, width, height, fov_deg_v, k1, k2):
+        # fy derived so the vertical half-angle matches PyBullet's computeProjectionMatrixFOV.
+        # fx == fy (square pixels) so horizontal FOV follows aspect, matching the pinhole render.
+        fy = 0.5 * height / np.tan(np.deg2rad(fov_deg_v) * 0.5)
+        fx = fy
+        cx = width * 0.5
+        cy = height * 0.5
+        uu, vv = np.meshgrid(np.arange(width, dtype=np.float32),
+                             np.arange(height, dtype=np.float32))
+        xd = (uu - cx) / fx
+        yd = (vv - cy) / fy
+        xn = xd.copy()
+        yn = yd.copy()
+        # Fixed-point inversion of the radial Brown-Conrady model — converges in ~5 iters
+        # for the mild |k1|,|k2| we expect. For each distorted output pixel we recover the
+        # underlying ray direction, which we then reproject through the pinhole to get the
+        # source pixel in the rendered image.
+        for _ in range(5):
+            r2 = xn * xn + yn * yn
+            factor = 1.0 + k1 * r2 + k2 * r2 * r2
+            xn = xd / factor
+            yn = yd / factor
+        map_x = (xn * fx + cx).astype(np.float32)
+        map_y = (yn * fy + cy).astype(np.float32)
+        return map_x, map_y
+
     def get_down_camera_image(self):
         """
         Render a downward-facing camera image (intended to approximate a Raspberry Pi camera).
         Camera intrinsics are approximated via a pinhole projection with FOV.
         Camera extrinsics are defined as a transform in the robot base frame (config key 'down_camera').
+        Optional radial (Brown-Conrady) lens distortion is applied via a cached cv2.remap when
+        'distortion_k1' or 'distortion_k2' is non-zero.
         """
         cam_cfg = self.config.get("down_camera", {})
         width = int(cam_cfg.get("width", 160))
@@ -426,6 +455,8 @@ class LineFollowerBot:
         fov = float(cam_cfg.get("fov", 90))
         near = float(cam_cfg.get("near", 0.01))
         far = float(cam_cfg.get("far", 1.5))
+        k1 = float(cam_cfg.get("distortion_k1", 0.0))
+        k2 = float(cam_cfg.get("distortion_k2", 0.0))
 
         pos_in_base = np.asarray(cam_cfg.get("pos_in_base", [0.08, 0.0, 0.12]), dtype=np.float32)
         rpy_in_base = np.asarray(cam_cfg.get("rpy_in_base", [np.pi, 0.0, 0.0]), dtype=np.float32)
@@ -474,4 +505,17 @@ class LineFollowerBot:
         if rgb.ndim == 1:
             rgb = rgb.reshape((h, w, 4))
         rgb = rgb[:, :, :3]
+
+        if k1 != 0.0 or k2 != 0.0:
+            key = (width, height, fov, k1, k2)
+            if getattr(self, "_down_cam_distort_key", None) != key:
+                self._down_cam_distort_key = key
+                self._down_cam_distort_map = self._build_down_cam_distort_map(
+                    width, height, fov, k1, k2
+                )
+            map_x, map_y = self._down_cam_distort_map
+            rgb = cv2.remap(
+                rgb, map_x, map_y, cv2.INTER_LINEAR,
+                borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0),
+            )
         return rgb
