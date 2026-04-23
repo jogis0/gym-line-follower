@@ -9,6 +9,33 @@ import numpy as np
 import gym_line_follower  # registers envs
 
 
+class OscillationPenaltyWrapper(gym.Wrapper):
+    """Replaces env's built-in smooth_steering. Penalises rapid steering reversals and
+    logs the per-episode mean penalty so it's visible in TensorBoard."""
+
+    def __init__(self, env, penalty_k: float = 0.2):
+        super().__init__(env)
+        self._penalty_k = penalty_k
+
+    def reset(self, **kwargs):
+        self._prev_wz = 0.0
+        self._ep_penalty_accum = 0.0
+        self._ep_steps = 0
+        return super().reset(**kwargs)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = super().step(action)
+        wz = float(action[1])
+        penalty = self._penalty_k * abs(wz - self._prev_wz)
+        reward -= penalty
+        self._prev_wz = wz
+        self._ep_penalty_accum += penalty
+        self._ep_steps += 1
+        if terminated or truncated:
+            info["mean_osc_penalty"] = self._ep_penalty_accum / max(self._ep_steps, 1)
+        return obs, reward, terminated, truncated, info
+
+
 class EpisodeMetricsWrapper(gym.Wrapper):
     """Tracks per-episode metrics and injects them into the final-step info dict."""
 
@@ -38,14 +65,13 @@ def make_env(*, seed: int, gui: bool) -> gym.Env:
         gui=gui,
         randomize=True,
         obsv_type="down_camera",
-        vx_min=0.0,
+        vx_min=0.05,
         progress_reward=True,
-        progress_reward_k=2.0,
-        smooth_steering=True,
-        smooth_steering_k=0.15,
-        domain_randomize_physics=True,
-        sensor_noise=0.5,
-        obs_lag=1,
+        progress_reward_k=3.0,
+        smooth_steering=False,  # handled by OscillationPenaltyWrapper; keeping both = double penalty
+        domain_randomize_physics=False,  # disabled for initial training; re-enable once laps are completing
+        sensor_noise=0.0,
+        obs_lag=0,
     )
     env.reset(seed=seed)
 
@@ -54,20 +80,9 @@ def make_env(*, seed: int, gui: bool) -> gym.Env:
     # declared space keeps it, breaking FrameStackObservation's concatenate buffer.
     env = gym.wrappers.GrayscaleObservation(env, keep_dim=False)
     env = gym.wrappers.ResizeObservation(env, shape=(84, 84))
-
-    # Brightness jitter to bridge sim-to-real lighting gap (training only).
-    aug_space = env.observation_space  # (84, 84) after resize
-    env = gym.wrappers.TransformObservation(
-        env,
-        lambda obs: np.clip(
-            (obs.astype(np.float32) * np.random.uniform(0.7, 1.4)).astype(np.int16),
-            0, 255,
-        ).astype(np.uint8),
-        observation_space=aug_space,
-    )
-
     env = gym.wrappers.FrameStackObservation(env, stack_size=4)
 
+    env = OscillationPenaltyWrapper(env, penalty_k=0.3)
     env = EpisodeMetricsWrapper(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     return env
@@ -81,6 +96,8 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
     parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_300000_steps.zip")
+    parser.add_argument("--resume-from", type=Path, default=None,
+                        help="Resume training from a checkpoint .zip. Loads matching vecnorm pkl alongside.")
     args = parser.parse_args()
 
     if not args.train and not args.eval:
@@ -96,6 +113,7 @@ def main() -> int:
             super().__init__()
             self._term_counts = {"completed": 0, "penalty": 0, "timeout": 0}
             self._wz_buf: list[float] = []
+            self._osc_buf: list[float] = []
             self._n_episodes = 0
 
         def _on_step(self) -> bool:
@@ -105,6 +123,8 @@ def main() -> int:
                     self._n_episodes += 1
                 if "mean_abs_wz" in info:
                     self._wz_buf.append(info["mean_abs_wz"])
+                if "mean_osc_penalty" in info:
+                    self._osc_buf.append(info["mean_osc_penalty"])
             return True
 
         def _on_rollout_end(self) -> None:
@@ -116,6 +136,24 @@ def main() -> int:
             if self._wz_buf:
                 self.logger.record("episode/mean_abs_wz", float(np.mean(self._wz_buf)))
                 self._wz_buf = []
+            if self._osc_buf:
+                self.logger.record("episode/mean_osc_penalty", float(np.mean(self._osc_buf)))
+                self._osc_buf = []
+
+    class VecNormalizeCheckpointCallback(BaseCallback):
+        """Saves VecNormalize stats alongside each model checkpoint so mid-run checkpoints are loadable."""
+
+        def __init__(self, save_freq: int, save_path: Path, venv_ref):
+            super().__init__()
+            self._save_freq = save_freq
+            self._save_path = save_path
+            self._venv_ref = venv_ref
+
+        def _on_step(self) -> bool:
+            if self.n_calls % self._save_freq == 0:
+                path = self._save_path / f"ppo_turtlebot3_vecnorm_{self.num_timesteps}_steps.pkl"
+                self._venv_ref.save(str(path))
+            return True
 
     vecnorm_path = args.model_path.parent / "ppo_turtlebot3_vecnorm.pkl"
 
@@ -128,7 +166,16 @@ def main() -> int:
     check_env(make_env(seed=args.seed, gui=False))
     venv = DummyVecEnv([_make] * 8)
     # norm_obs=False: CnnPolicy divides images by 255 internally; norm_reward stabilises wide reward range
-    venv = VecNormalize(venv, norm_obs=False, norm_reward=True, clip_obs=10.0)
+    if args.resume_from is not None:
+        # Derive matching vecnorm: ppo_turtlebot3_<N>_steps.zip -> ppo_turtlebot3_vecnorm_<N>_steps.pkl
+        vecnorm_resume = args.resume_from.with_name(
+            args.resume_from.stem.replace("ppo_turtlebot3_", "ppo_turtlebot3_vecnorm_") + ".pkl"
+        )
+        if not vecnorm_resume.exists():
+            parser.error(f"VecNormalize stats not found at {vecnorm_resume}")
+        venv = VecNormalize.load(str(vecnorm_resume), venv)
+    else:
+        venv = VecNormalize(venv, norm_obs=False, norm_reward=True, clip_obs=10.0)
     venv = VecMonitor(venv)
 
     if args.train:
@@ -136,24 +183,37 @@ def main() -> int:
         print(f"CUDA available: {torch.cuda.is_available()}")
         args.model_path.parent.mkdir(parents=True, exist_ok=True)
 
-        model = PPO(
-            policy="CnnPolicy",
-            env=venv,
-            seed=args.seed,
-            verbose=1,
-            tensorboard_log=str(Path("logs") / "ppo_turtlebot3"),
-            n_steps=1024,
-            batch_size=256,
-            n_epochs=4,
-            ent_coef=0.01,
-            learning_rate=3e-4,
-        )
+        if args.resume_from is not None:
+            print(f"Resuming from {args.resume_from}")
+            model = PPO.load(str(args.resume_from), env=venv,
+                             tensorboard_log=str(Path("logs") / "ppo_turtlebot3"))
+        else:
+            model = PPO(
+                policy="CnnPolicy",
+                env=venv,
+                seed=args.seed,
+                verbose=1,
+                tensorboard_log=str(Path("logs") / "ppo_turtlebot3"),
+                n_steps=1024,
+                batch_size=256,
+                n_epochs=4,
+                ent_coef=0.01,
+                learning_rate=2.5e-4,
+                clip_range=0.2,
+            )
         checkpoint_callback = CheckpointCallback(
             save_freq=100_000 // 8,  # per-env steps; 8 envs → saves every 100k total timesteps
             save_path=str(args.model_path.parent),
             name_prefix="ppo_turtlebot3",
         )
-        model.learn(total_timesteps=args.timesteps, progress_bar=True, callback=[checkpoint_callback, CustomMetricsCallback()])
+        vecnorm_ckpt_callback = VecNormalizeCheckpointCallback(
+            save_freq=100_000 // 8,
+            save_path=args.model_path.parent,
+            venv_ref=venv,
+        )
+        model.learn(total_timesteps=args.timesteps, progress_bar=True,
+                    callback=[checkpoint_callback, vecnorm_ckpt_callback, CustomMetricsCallback()],
+                    reset_num_timesteps=args.resume_from is None)
         model.save(str(args.model_path))
         venv.save(str(vecnorm_path))
 

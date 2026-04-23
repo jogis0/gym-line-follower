@@ -16,7 +16,7 @@ SMOOTH_STEERING_K = 0.15  # must match the value used during training
 
 def main():
     parser = argparse.ArgumentParser(description="Test a trained PPO model on the TurtleBot3 line follower.")
-    parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_300000_steps.zip",
+    parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_2800000_steps.zip",
                         help="Path to the trained .zip model file.")
     parser.add_argument("--episodes", type=int, default=5, help="Number of episodes to run.")
     parser.add_argument("--seed", type=int, default=42)

@@ -430,6 +430,12 @@ class LineFollowerBot:
         pos_in_base = np.asarray(cam_cfg.get("pos_in_base", [0.08, 0.0, 0.12]), dtype=np.float32)
         rpy_in_base = np.asarray(cam_cfg.get("rpy_in_base", [np.pi, 0.0, 0.0]), dtype=np.float32)
 
+        pitch_noise = float(self.config.get("camera_pitch_noise", 0.0))
+        roll_noise = float(self.config.get("camera_roll_noise", 0.0))
+        height_noise = float(self.config.get("camera_height_noise", 0.0))
+        rpy_in_base = rpy_in_base + np.array([roll_noise, pitch_noise, 0.0], dtype=np.float32)
+        pos_in_base = pos_in_base + np.array([0.0, 0.0, height_noise], dtype=np.float32)
+
         base_pos, base_orn = self.pb_client.getBasePositionAndOrientation(self.bot)
         base_pos = np.asarray(base_pos, dtype=np.float32)
 

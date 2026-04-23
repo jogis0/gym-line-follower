@@ -13,6 +13,10 @@
   "cmd_vel_wz_limit": 2.84,
   "motor_noise_std": {"default": 0.02, "range": [0.01, 0.04]},
 
+  "camera_pitch_noise": {"default": 0.0, "range": [-0.1, 0.1]},
+  "camera_roll_noise": {"default": 0.0, "range": [-0.05, 0.05]},
+  "camera_height_noise": {"default": 0.0, "range": [-0.02, 0.02]},
+
   "down_camera": {
     "width": 160,
     "height": 120,
