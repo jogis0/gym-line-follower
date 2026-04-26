@@ -12,7 +12,7 @@
 
   "num_verts": {"default": 18,
                 "range": [12, 24]},
-  "sharp_corner_prob": {"default": 0.4,
+  "sharp_corner_prob": {"default": 0.2,
                         "range": [0.2, 0.65]},
 
   "variable_line_width": {"default": true,
@@ -20,21 +20,21 @@
   "num_width_segments": {"default": 8,
                          "range": [4, 14]},
 
-  "dead_ends_enabled": {"default": true,
+  "dead_ends_enabled": {"default": false,
                         "choice": [true, false]},
   "num_dead_ends": {"default": 3,
                     "range": [1, 6]},
   "dead_end_length": {"default": 0.08,
                       "range": [0.04, 0.15]},
 
-  "crossings_enabled": {"default": true,
+  "crossings_enabled": {"default": false,
                         "choice": [true, false]},
   "num_crossings": {"default": 2,
                     "range": [1, 4]},
   "crossing_length": {"default": 0.10,
                       "range": [0.06, 0.15]},
 
-  "gaps_enabled": {"default": true,
+  "gaps_enabled": {"default": false,
                    "choice": [true, false]},
   "num_gaps": {"default": 2,
                "range": [1, 4]},

@@ -20,14 +20,14 @@
 
     <link name="chassis">
         <visual>
-            <origin xyz="-0.032 0 0.0" rpy="0 0 0"/>
+            <origin xyz="0.032 0 0.0" rpy="0 0 3.14159"/>
             <geometry>
                 <mesh filename="meshes/burger_base.stl" scale="0.001 0.001 0.001"/>
             </geometry>
             <material name="light_black"/>
         </visual>
         <collision>
-            <origin xyz="-0.032 0 0.070" rpy="0 0 0"/>
+            <origin xyz="0.032 0 0.070" rpy="0 0 0"/>
             <geometry>
                 <box size="0.140 0.140 0.143"/>
             </geometry>
@@ -138,7 +138,7 @@
     <joint name="chassis_to_caster" type="fixed">
         <parent link="chassis"/>
         <child link="caster"/>
-        <origin rpy="-1.5708 0 0" xyz="-0.081 0 -0.004"/>
+        <origin rpy="-1.5708 0 0" xyz="0.081 0 -0.004"/>
     </joint>
 
 </robot>

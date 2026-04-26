@@ -1,39 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import gymnasium as gym
 import numpy as np
 
-import gym_line_follower  # registers envs
-
-
-class OscillationPenaltyWrapper(gym.Wrapper):
-    """Replaces env's built-in smooth_steering. Penalises rapid steering reversals and
-    logs the per-episode mean penalty so it's visible in TensorBoard."""
-
-    def __init__(self, env, penalty_k: float = 0.2):
-        super().__init__(env)
-        self._penalty_k = penalty_k
-
-    def reset(self, **kwargs):
-        self._prev_wz = 0.0
-        self._ep_penalty_accum = 0.0
-        self._ep_steps = 0
-        return super().reset(**kwargs)
-
-    def step(self, action):
-        obs, reward, terminated, truncated, info = super().step(action)
-        wz = float(action[1])
-        penalty = self._penalty_k * abs(wz - self._prev_wz)
-        reward -= penalty
-        self._prev_wz = wz
-        self._ep_penalty_accum += penalty
-        self._ep_steps += 1
-        if terminated or truncated:
-            info["mean_osc_penalty"] = self._ep_penalty_accum / max(self._ep_steps, 1)
-        return obs, reward, terminated, truncated, info
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from ppo_runtime import MODEL_PATH, build_env, vecnorm_for  # noqa: E402
 
 
 class EpisodeMetricsWrapper(gym.Wrapper):
@@ -60,29 +35,7 @@ class EpisodeMetricsWrapper(gym.Wrapper):
 
 
 def make_env(*, seed: int, gui: bool) -> gym.Env:
-    env = gym.make(
-        "TurtleBot3LineFollower-v0",
-        gui=gui,
-        randomize=True,
-        obsv_type="down_camera",
-        vx_min=0.05,
-        progress_reward=True,
-        progress_reward_k=3.0,
-        smooth_steering=False,  # handled by OscillationPenaltyWrapper; keeping both = double penalty
-        domain_randomize_physics=False,  # disabled for initial training; re-enable once laps are completing
-        sensor_noise=0.0,
-        obs_lag=0,
-    )
-    env.reset(seed=seed)
-
-    # keep_dim=False so space stays 2D: (120,160) -> Resize (84,84) -> FrameStack (4,84,84).
-    # With keep_dim=True, ResizeObservation's cv2.resize silently drops the C=1 dim while the
-    # declared space keeps it, breaking FrameStackObservation's concatenate buffer.
-    env = gym.wrappers.GrayscaleObservation(env, keep_dim=False)
-    env = gym.wrappers.ResizeObservation(env, shape=(84, 84))
-    env = gym.wrappers.FrameStackObservation(env, stack_size=4)
-
-    env = OscillationPenaltyWrapper(env, penalty_k=0.3)
+    env = build_env(seed=seed, gui=gui, with_oscillation_penalty=True)
     env = EpisodeMetricsWrapper(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     return env
@@ -95,7 +48,7 @@ def main() -> int:
     parser.add_argument("--timesteps", type=int, default=300_000)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
-    parser.add_argument("--model-path", type=Path, default=Path("models") / "ppo_turtlebot3_300000_steps.zip")
+    parser.add_argument("--model-path", type=Path, default=MODEL_PATH)
     parser.add_argument("--resume-from", type=Path, default=None,
                         help="Resume training from a checkpoint .zip. Loads matching vecnorm pkl alongside.")
     args = parser.parse_args()
@@ -167,10 +120,7 @@ def main() -> int:
     venv = DummyVecEnv([_make] * 8)
     # norm_obs=False: CnnPolicy divides images by 255 internally; norm_reward stabilises wide reward range
     if args.resume_from is not None:
-        # Derive matching vecnorm: ppo_turtlebot3_<N>_steps.zip -> ppo_turtlebot3_vecnorm_<N>_steps.pkl
-        vecnorm_resume = args.resume_from.with_name(
-            args.resume_from.stem.replace("ppo_turtlebot3_", "ppo_turtlebot3_vecnorm_") + ".pkl"
-        )
+        vecnorm_resume = vecnorm_for(args.resume_from)
         if not vecnorm_resume.exists():
             parser.error(f"VecNormalize stats not found at {vecnorm_resume}")
         venv = VecNormalize.load(str(vecnorm_resume), venv)
@@ -197,8 +147,8 @@ def main() -> int:
                 n_steps=1024,
                 batch_size=256,
                 n_epochs=4,
-                ent_coef=0.01,
-                learning_rate=2.5e-4,
+                ent_coef=0.02,
+                learning_rate=2e-4,
                 clip_range=0.2,
             )
         checkpoint_callback = CheckpointCallback(

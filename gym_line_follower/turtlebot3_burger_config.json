@@ -24,8 +24,8 @@
     "near": 0.01,
     "far": 1.5,
     "hz": 25,
-    "pos_in_base": [-0.13, 0.0, 0.18],
-    "rpy_in_base": [0.0, 1.5707, 3.1416],
+    "pos_in_base": [0.10, 0.0, 0.16],
+    "rpy_in_base": [0.0, 1.0472, 0.0],
     "distortion_k1": 0.1,
     "distortion_k2": 0.0
   }
