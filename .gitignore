@@ -7,3 +7,4 @@ ddpg_turtlebot3.zip
 ppo_turtlebot3.zip
 ppo_turtlebot3_*
 0_VRDemoSettings.txt
+gym_line_follower/eval_textures/

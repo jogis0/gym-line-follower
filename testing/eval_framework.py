@@ -13,7 +13,10 @@ works (PPO, SAC, DDPG, TD3, ...).
 """
 from __future__ import annotations
 
+import json
 import math
+import os
+import shutil
 import time
 from pathlib import Path
 
@@ -29,6 +32,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from ppo_runtime import build_env  # noqa: E402
 
+from gym_line_follower.randomizer_dict import RandomizerDict  # noqa: E402
 from gym_line_follower.track import Track  # noqa: E402
 
 
@@ -50,17 +54,41 @@ _TRACK_GEN_KWARGS = dict(
     nb_checkpoints=500,
 )
 
+EVAL_TEXTURE_DIR = Path(__file__).resolve().parent.parent / "gym_line_follower" / "eval_textures"
+
+
+def _eval_texture_path(seed: int) -> Path:
+    return EVAL_TEXTURE_DIR / f"eval_track_{seed}.png"
+
+
+def _ensure_eval_texture(seed: int, render_params: RandomizerDict) -> Path:
+    """Lazily render and cache the per-seed PNG so eval visuals are byte-stable.
+
+    The renderer uses unseeded ``np.random`` for foam_dark noise, line edge
+    noise, opacity jitter, etc. Building once and caching pins those bytes.
+    Pre-condition: ``render_params`` is already randomized with ``seed=seed``.
+    """
+    path = _eval_texture_path(seed)
+    if path.exists():
+        return path
+    EVAL_TEXTURE_DIR.mkdir(parents=True, exist_ok=True)
+    track = Track.generate(seed=seed, render_params=render_params, **_TRACK_GEN_KWARGS)
+    track.render(3, 2.5, ppm=1500, save=str(path))
+    return path
+
 
 # ---------------------------------------------------------------------------
 # FixedTrackWrapper
 # ---------------------------------------------------------------------------
 
 class FixedTrackWrapper(gym.Wrapper):
-    """Round-robins through a fixed list of track seeds, one per reset.
+    """Round-robins through fixed track seeds with cached, deterministic visuals.
 
-    Sets ``base_env.preset_track`` to a freshly generated Track before each
-    reset so the env reproduces the same track shape every time it sees a given
-    seed. The current seed is exposed via ``self.current_track_seed``.
+    Each seed maps to:
+      * a deterministic track geometry (via ``Track.generate(seed=...)``),
+      * a deterministic visual config (via ``RandomizerDict.randomize(seed=...)``),
+      * a cached rendered PNG (so even unseeded renderer noise is bytewise
+        stable across runs).
     """
 
     def __init__(self, env: gym.Env, seeds: list[int]):
@@ -71,15 +99,42 @@ class FixedTrackWrapper(gym.Wrapper):
         self._idx = 0
         self.current_track_seed: int | None = None
 
+        # The base env was built with randomize=False, so its track_render_params
+        # is None. Load the same config training uses and own the dict here so we
+        # can randomize it per seed and feed it to Track.generate ourselves.
+        base_env = self.env.unwrapped
+        cfg_path = os.path.join(base_env.local_dir, "track_render_config.json")
+        with open(cfg_path, "r") as f:
+            self._render_params = RandomizerDict(json.load(f))
+        base_env.track_render_params = self._render_params
+
     def reset(self, **kwargs):
         seed = self._seeds[self._idx % len(self._seeds)]
         self._idx += 1
-        base_env = self.env.unwrapped
-        base_env.preset_track = Track.generate(
+
+        # Same seed -> same dict state every run (RandomizerDict uses random.seed).
+        self._render_params.randomize(seed=seed)
+
+        track = Track.generate(
             seed=seed,
-            render_params=base_env.track_render_params,
+            render_params=self._render_params,
             **_TRACK_GEN_KWARGS,
         )
+
+        # Ensure the cached PNG exists (renders once if missing) and short-circuit
+        # the track's renderer so build_track_plane copies the cached bytes
+        # instead of re-running the unseeded np.random noise.
+        cached_png = _ensure_eval_texture(seed, self._render_params)
+
+        def _copy_cached_render(*args, save: str = None, **kwargs):
+            if save is None:
+                raise ValueError("Cached eval render requires a save= path.")
+            shutil.copy(cached_png, save)
+
+        track.render = _copy_cached_render
+
+        base_env = self.env.unwrapped
+        base_env.preset_track = track
         self.current_track_seed = seed
         return super().reset(**kwargs)
 
