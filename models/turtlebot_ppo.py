@@ -8,7 +8,20 @@ import gymnasium as gym
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ppo_runtime import MODEL_PATH, build_env, vecnorm_for  # noqa: E402
+from ppo_runtime import (  # noqa: E402
+    CHECKPOINT_FREQUENCY,
+    DEFAULT_SEED,
+    EVAL_FREQUENCY,
+    N_ENVS,
+    PPO_HYPERPARAMETERS,
+    RunConfig,
+    build_env,
+    eval_log_dir,
+    model_path_for,
+    run_dir,
+    tb_log_dir,
+    vecnorm_for,
+)
 
 
 class EpisodeMetricsWrapper(gym.Wrapper):
@@ -25,12 +38,6 @@ class EpisodeMetricsWrapper(gym.Wrapper):
         self._steps += 1
         if terminated or truncated:
             info["mean_abs_wz"] = self._wz_accum / max(self._steps, 1)
-            if truncated:
-                info["termination"] = "timeout"
-            elif reward <= -50.0:
-                info["termination"] = "penalty"
-            else:
-                info["termination"] = "completed"
         return obs, reward, terminated, truncated, info
 
 
@@ -46,9 +53,10 @@ def main() -> int:
     parser.add_argument("--train", action="store_true", help="Train a new PPO policy.")
     parser.add_argument("--eval", action="store_true", help="Evaluate an existing PPO policy.")
     parser.add_argument("--timesteps", type=int, default=300_000)
-    parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
-    parser.add_argument("--model-path", type=Path, default=MODEL_PATH)
+    parser.add_argument("--model-path", type=Path, default=None,
+                        help="Override model output path. Default: models/PPO/seed_<seed>/ppo_turtlebot3.zip")
     parser.add_argument("--resume-from", type=Path, default=None,
                         help="Resume training from a checkpoint .zip. Loads matching vecnorm pkl alongside.")
     args = parser.parse_args()
@@ -56,15 +64,23 @@ def main() -> int:
     if not args.train and not args.eval:
         parser.error("Choose one: --train or --eval")
 
+    run_path = run_dir(args.seed)
+    run_path.mkdir(parents=True, exist_ok=True)
+    if args.model_path is None:
+        args.model_path = model_path_for(args.seed)
+
     from stable_baselines3 import PPO
     from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
     from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
+    from testing.eval_framework import EVAL_TRACK_SEEDS, build_eval_env
+    from testing.eval_callback import PeriodicEvalCallback
+
     class CustomMetricsCallback(BaseCallback):
         def __init__(self):
             super().__init__()
-            self._term_counts = {"completed": 0, "penalty": 0, "timeout": 0}
+            self._term_counts = {"completed": 0, "penalty": 0, "timeout": 0, "line_lost": 0}
             self._wz_buf: list[float] = []
             self._osc_buf: list[float] = []
             self._n_episodes = 0
@@ -72,7 +88,9 @@ def main() -> int:
         def _on_step(self) -> bool:
             for info in self.locals["infos"]:
                 if "termination" in info:
-                    self._term_counts[info["termination"]] += 1
+                    bucket = info["termination"]
+                    if bucket in self._term_counts:
+                        self._term_counts[bucket] += 1
                     self._n_episodes += 1
                 if "mean_abs_wz" in info:
                     self._wz_buf.append(info["mean_abs_wz"])
@@ -84,7 +102,7 @@ def main() -> int:
             if self._n_episodes > 0:
                 for k, v in self._term_counts.items():
                     self.logger.record(f"episode/term_{k}_rate", v / self._n_episodes)
-                self._term_counts = {"completed": 0, "penalty": 0, "timeout": 0}
+                self._term_counts = {"completed": 0, "penalty": 0, "timeout": 0, "line_lost": 0}
                 self._n_episodes = 0
             if self._wz_buf:
                 self.logger.record("episode/mean_abs_wz", float(np.mean(self._wz_buf)))
@@ -108,7 +126,7 @@ def main() -> int:
                 self._venv_ref.save(str(path))
             return True
 
-    vecnorm_path = args.model_path.parent / "ppo_turtlebot3_vecnorm.pkl"
+    vecnorm_path = vecnorm_for(args.model_path)
 
     def _make() -> gym.Env:
         env = make_env(seed=args.seed, gui=args.gui)
@@ -117,7 +135,7 @@ def main() -> int:
 
     from stable_baselines3.common.env_checker import check_env
     check_env(make_env(seed=args.seed, gui=False))
-    venv = DummyVecEnv([_make] * 8)
+    venv = DummyVecEnv([_make] * N_ENVS)
     # norm_obs=False: CnnPolicy divides images by 255 internally; norm_reward stabilises wide reward range
     if args.resume_from is not None:
         vecnorm_resume = vecnorm_for(args.resume_from)
@@ -131,41 +149,57 @@ def main() -> int:
     if args.train:
         import torch
         print(f"CUDA available: {torch.cuda.is_available()}")
-        args.model_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Save run config snapshot before training starts so the run is
+        # reproducible even if the user later edits ppo_runtime.py.
+        RunConfig.capture(
+            seed=args.seed,
+            total_timesteps=args.timesteps,
+            eval_track_seeds=EVAL_TRACK_SEEDS,
+            resumed_from=str(args.resume_from) if args.resume_from else None,
+        ).save(run_path / "run_config.json")
 
         if args.resume_from is not None:
             print(f"Resuming from {args.resume_from}")
             model = PPO.load(str(args.resume_from), env=venv,
-                             tensorboard_log=str(Path("logs") / "ppo_turtlebot3"))
+                             tensorboard_log=str(tb_log_dir(args.seed)))
         else:
             model = PPO(
-                policy="CnnPolicy",
                 env=venv,
                 seed=args.seed,
                 verbose=1,
-                tensorboard_log=str(Path("logs") / "ppo_turtlebot3"),
-                n_steps=1024,
-                batch_size=256,
-                n_epochs=4,
-                ent_coef=0.02,
-                learning_rate=2e-4,
-                clip_range=0.2,
+                tensorboard_log=str(tb_log_dir(args.seed)),
+                **PPO_HYPERPARAMETERS,
             )
+        save_freq_per_env = max(1, CHECKPOINT_FREQUENCY // N_ENVS)
         checkpoint_callback = CheckpointCallback(
-            save_freq=100_000 // 8,  # per-env steps; 8 envs → saves every 100k total timesteps
-            save_path=str(args.model_path.parent),
+            save_freq=save_freq_per_env,
+            save_path=str(run_path),
             name_prefix="ppo_turtlebot3",
         )
         vecnorm_ckpt_callback = VecNormalizeCheckpointCallback(
-            save_freq=100_000 // 8,
-            save_path=args.model_path.parent,
+            save_freq=save_freq_per_env,
+            save_path=run_path,
             venv_ref=venv,
         )
-        model.learn(total_timesteps=args.timesteps, progress_bar=True,
-                    callback=[checkpoint_callback, vecnorm_ckpt_callback, CustomMetricsCallback()],
-                    reset_num_timesteps=args.resume_from is None)
-        model.save(str(args.model_path))
-        venv.save(str(vecnorm_path))
+        eval_venv = build_eval_env(EVAL_TRACK_SEEDS, gui=False)
+        eval_callback = PeriodicEvalCallback(
+            eval_venv=eval_venv,
+            eval_freq=EVAL_FREQUENCY,
+            log_dir=eval_log_dir(args.seed),
+        )
+        try:
+            model.learn(
+                total_timesteps=args.timesteps,
+                progress_bar=True,
+                callback=[checkpoint_callback, vecnorm_ckpt_callback,
+                          CustomMetricsCallback(), eval_callback],
+                reset_num_timesteps=args.resume_from is None,
+            )
+            model.save(str(args.model_path))
+            venv.save(str(vecnorm_path))
+        finally:
+            eval_venv.close()
 
     if args.eval:
         venv = VecNormalize.load(str(vecnorm_path), venv)

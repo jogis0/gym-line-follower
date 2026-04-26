@@ -181,6 +181,7 @@ class LineFollowerEnv(gym.Env):
             self.seed(seed)
         self.step_counter = 0
         self._prev_wz = 0.0
+        self._steps_since_line_visible = 0
         if self._obs_buffer is not None:
             self._obs_buffer.clear()
         self.config.randomize()
@@ -253,6 +254,8 @@ class LineFollowerEnv(gym.Env):
             warnings.warn("Calling step() on done environment.")
 
         reward = 0.
+        components = {"checkpoint": 0.0, "progress": 0.0, "time_penalty": 0.0,
+                      "smoothness": 0.0, "terminal": 0.0}
 
         for _ in range(self.sub_steps):
             self.follower_bot.apply_action(action)
@@ -292,16 +295,22 @@ class LineFollowerEnv(gym.Env):
         checkpoint_reward = 1000. / self.track.nb_checkpoints
         if self.position_on_track - self.track.progress < 0.4:
             checkpoints_reached = self.track.update_progress(self.position_on_track)
-            reward += checkpoints_reached * checkpoint_reward * (1.0 - track_err_norm) ** 2
+            ckpt_r = checkpoints_reached * checkpoint_reward * (1.0 - track_err_norm) ** 2
+            reward += ckpt_r
+            components["checkpoint"] = ckpt_r
 
         # Time penalty / progress reward
         if self.progress_reward:
             v_progress = self._get_velocity_along_track()
-            reward += self.progress_reward_k * v_progress
+            prog_r = self.progress_reward_k * v_progress
+            reward += prog_r
+            components["progress"] = prog_r
             if v_progress < 0.02:
                 reward -= 0.1   # constant penalty when not making forward progress
+                components["time_penalty"] = -0.1
         else:
             reward -= 0.2
+            components["time_penalty"] = -0.2
 
         # Steering smoothness penalty
         if self.smooth_steering:
@@ -309,24 +318,44 @@ class LineFollowerEnv(gym.Env):
                 wz = float(raw_action[1])
             else:
                 wz = float(raw_action[1] - raw_action[0])
-            reward -= self.smooth_steering_k * abs(wz - self._prev_wz)
+            smooth_r = -self.smooth_steering_k * abs(wz - self._prev_wz)
+            reward += smooth_r
+            components["smoothness"] = smooth_r
             self._prev_wz = wz
+
+        # Track line visibility proxy: track_err below ~40% of max_track_err means
+        # the bot is close enough to the line that we treat it as "line visible".
+        # Used to classify track-distance terminations as line_lost vs penalty.
+        line_lost_proxy_threshold = 0.4 * self.max_track_err
+        if track_err < line_lost_proxy_threshold:
+            self._steps_since_line_visible = 0
+        else:
+            self._steps_since_line_visible += 1
 
         terminated = False
         truncated = False
+        termination_reason = None
         if self.track.done:
             terminated = True
+            termination_reason = "completed"
             print("TRACK DONE")
         elif abs(self.position_on_track - self.track.progress) > 0.5:
             reward = -100
+            components = {"checkpoint": 0.0, "progress": 0.0, "time_penalty": 0.0,
+                          "smoothness": 0.0, "terminal": -100.0}
             terminated = True
+            termination_reason = "penalty"
             print("PROGRESS DISTANCE LIMIT")
         elif track_err > self.max_track_err:
             reward = -100.
+            components = {"checkpoint": 0.0, "progress": 0.0, "time_penalty": 0.0,
+                          "smoothness": 0.0, "terminal": -100.0}
             terminated = True
+            termination_reason = "line_lost" if self._steps_since_line_visible > 3 else "penalty"
             print("TRACK DISTANCE LIMIT")
         elif self.step_counter > self.max_steps:
             truncated = True
+            termination_reason = "timeout"
             print("TIME LIMIT")
 
         # Sensor noise
@@ -356,6 +385,14 @@ class LineFollowerEnv(gym.Env):
             observation = self._obs_buffer[0]
 
         info = self._get_info()
+        info["track_err"] = float(track_err)
+        info["progress"] = float(self.track.progress)
+        info["reward_components"] = components
+        (vx, vy), wz_actual = self.follower_bot.vel
+        info["forward_speed"] = float(np.sqrt(vx * vx + vy * vy))
+        info["angular_vel"] = float(wz_actual)
+        if termination_reason is not None:
+            info["termination"] = termination_reason
         self.step_counter += 1
         self.done = terminated or truncated
         return observation, reward, terminated, truncated, info

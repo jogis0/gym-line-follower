@@ -1,0 +1,50 @@
+{
+  "algorithm": "PPO",
+  "seed": 999,
+  "total_timesteps": 8000,
+  "env_id": "TurtleBot3LineFollower-v0",
+  "env_kwargs": {
+    "randomize": true,
+    "obsv_type": "down_camera",
+    "vx_min": 0.1,
+    "progress_reward": true,
+    "progress_reward_k": 2.0,
+    "smooth_steering": false,
+    "domain_randomize_physics": false,
+    "sensor_noise": 0.0,
+    "obs_lag": 0
+  },
+  "oscillation_penalty_k": 0.6,
+  "resize_shape": [
+    84,
+    84
+  ],
+  "frame_stack_size": 4,
+  "n_envs": 8,
+  "hyperparameters": {
+    "policy": "CnnPolicy",
+    "n_steps": 1024,
+    "batch_size": 256,
+    "n_epochs": 4,
+    "ent_coef": 0.02,
+    "learning_rate": 0.0002,
+    "clip_range": 0.2
+  },
+  "eval_frequency": 50000,
+  "checkpoint_frequency": 50000,
+  "eval_track_seeds": [
+    1000,
+    1001,
+    1002,
+    1003,
+    1004,
+    1005,
+    1006,
+    1007,
+    1008,
+    1009
+  ],
+  "started_at": "2026-04-26T20:55:42",
+  "git_commit": "b85ffd56da51f6237e994263d5cf35d5f6ac0eca",
+  "resumed_from": null
+}
