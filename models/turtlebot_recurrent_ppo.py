@@ -8,18 +8,17 @@ import gymnasium as gym
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from sac_runtime import (  # noqa: E402
+from recurrent_ppo_runtime import (  # noqa: E402
     CHECKPOINT_FREQUENCY,
     DEFAULT_SEED,
     EVAL_FREQUENCY,
     N_ENVS,
-    SAC_HYPERPARAMETERS,
+    RECURRENT_PPO_HYPERPARAMETERS,
     RunConfig,
     best_model_path_for,
     build_env,
     eval_log_dir,
     model_path_for,
-    replay_buffer_for,
     run_dir,
     tb_log_dir,
     vecnorm_for,
@@ -52,15 +51,15 @@ def make_env(*, seed: int, gui: bool) -> gym.Env:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--train", action="store_true", help="Train a new SAC policy.")
-    parser.add_argument("--eval", action="store_true", help="Evaluate an existing SAC policy.")
+    parser.add_argument("--train", action="store_true", help="Train a new RecurrentPPO policy.")
+    parser.add_argument("--eval", action="store_true", help="Evaluate an existing RecurrentPPO policy.")
     parser.add_argument("--timesteps", type=int, default=300_000)
     parser.add_argument("--seed", type=int, default=DEFAULT_SEED)
     parser.add_argument("--gui", action="store_true", help="Enable PyBullet GUI window.")
     parser.add_argument("--model-path", type=Path, default=None,
-                        help="Override model output path. Default: models/SAC/seed_<seed>/sac_turtlebot3.zip")
+                        help="Override model output path. Default: D:/RecurrentPPO/seed_<seed>/recurrent_ppo_turtlebot3.zip")
     parser.add_argument("--resume-from", type=Path, default=None,
-                        help="Resume training from a checkpoint .zip. Loads matching vecnorm and replay-buffer pkls alongside.")
+                        help="Resume training from a checkpoint .zip. Loads matching vecnorm pkl alongside.")
     args = parser.parse_args()
 
     if not args.train and not args.eval:
@@ -71,13 +70,14 @@ def main() -> int:
     if args.model_path is None:
         args.model_path = model_path_for(args.seed)
 
-    from stable_baselines3 import SAC
+    from sb3_contrib import RecurrentPPO
     from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback
     from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.vec_env import DummyVecEnv, VecMonitor, VecNormalize
 
     from testing.eval_framework import EVAL_TRACK_SEEDS, build_eval_env
     from testing.eval_callback import PeriodicEvalCallback
+    from testing.lstm_eval_adapter import LstmEvalWrapper
 
     class CustomMetricsCallback(BaseCallback):
         def __init__(self):
@@ -124,26 +124,27 @@ def main() -> int:
 
         def _on_step(self) -> bool:
             if self.n_calls % self._save_freq == 0:
-                path = self._save_path / f"sac_turtlebot3_vecnorm_{self.num_timesteps}_steps.pkl"
+                path = self._save_path / f"recurrent_ppo_turtlebot3_vecnorm_{self.num_timesteps}_steps.pkl"
                 self._venv_ref.save(str(path))
             return True
 
-    class ReplayBufferCheckpointCallback(BaseCallback):
-        """Saves SAC replay buffer alongside each checkpoint so mid-run resumes restore full off-policy state."""
+    class LstmPeriodicEvalCallback(PeriodicEvalCallback):
+        """PeriodicEvalCallback variant that wraps RecurrentPPO with LstmEvalWrapper.
 
-        def __init__(self, save_freq: int, save_path: Path):
-            super().__init__()
-            self._save_freq = save_freq
-            self._save_path = save_path
+        run_evaluation calls model.predict(obs, deterministic=True); RecurrentPPO
+        needs LSTM state threaded through. The wrapper hides that bookkeeping and
+        also exposes reset_state() which run_evaluation calls per episode.
+        """
 
         def _on_step(self) -> bool:
-            if self.n_calls % self._save_freq == 0:
-                path = self._save_path / f"sac_turtlebot3_replay_buffer_{self.num_timesteps}_steps.pkl"
-                self.model.save_replay_buffer(str(path))
-            return True
+            real_model = self.model
+            self.model = LstmEvalWrapper(real_model)
+            try:
+                return super()._on_step()
+            finally:
+                self.model = real_model
 
     vecnorm_path = vecnorm_for(args.model_path)
-    replay_buffer_path = replay_buffer_for(args.model_path)
 
     def _make() -> gym.Env:
         env = make_env(seed=args.seed, gui=args.gui)
@@ -153,7 +154,7 @@ def main() -> int:
     from stable_baselines3.common.env_checker import check_env
     check_env(make_env(seed=args.seed, gui=False))
     venv = DummyVecEnv([_make] * N_ENVS)
-    # norm_obs=False: CnnPolicy divides images by 255 internally; norm_reward stabilises wide reward range
+    # norm_obs=False: CnnLstmPolicy divides images by 255 internally; norm_reward stabilises wide reward range
     if args.resume_from is not None:
         vecnorm_resume = vecnorm_for(args.resume_from)
         if not vecnorm_resume.exists():
@@ -168,7 +169,7 @@ def main() -> int:
         print(f"CUDA available: {torch.cuda.is_available()}")
 
         # Save run config snapshot before training starts so the run is
-        # reproducible even if the user later edits sac_runtime.py.
+        # reproducible even if the user later edits recurrent_ppo_runtime.py.
         RunConfig.capture(
             seed=args.seed,
             total_timesteps=args.timesteps,
@@ -178,43 +179,31 @@ def main() -> int:
 
         if args.resume_from is not None:
             print(f"Resuming from {args.resume_from}")
-            model = SAC.load(str(args.resume_from), env=venv,
-                             tensorboard_log=str(tb_log_dir(args.seed)))
-            buffer_resume = replay_buffer_for(args.resume_from)
-            if buffer_resume.exists():
-                print(f"Loading replay buffer from {buffer_resume}")
-                model.load_replay_buffer(str(buffer_resume))
-            else:
-                print(f"WARNING: replay buffer not found at {buffer_resume}; "
-                      "continuing with empty buffer (will re-warm during learning_starts).")
+            model = RecurrentPPO.load(str(args.resume_from), env=venv,
+                                      tensorboard_log=str(tb_log_dir(args.seed)))
         else:
-            model = SAC(
+            model = RecurrentPPO(
                 env=venv,
                 seed=args.seed,
                 verbose=1,
                 tensorboard_log=str(tb_log_dir(args.seed)),
-                **SAC_HYPERPARAMETERS,
+                **RECURRENT_PPO_HYPERPARAMETERS,
             )
         save_freq_per_env = max(1, CHECKPOINT_FREQUENCY // N_ENVS)
         checkpoint_callback = CheckpointCallback(
             save_freq=save_freq_per_env,
             save_path=str(run_path),
-            name_prefix="sac_turtlebot3",
+            name_prefix="recurrent_ppo_turtlebot3",
         )
         vecnorm_ckpt_callback = VecNormalizeCheckpointCallback(
             save_freq=save_freq_per_env,
             save_path=run_path,
             venv_ref=venv,
         )
-        replay_ckpt_callback = ReplayBufferCheckpointCallback(
-            save_freq=save_freq_per_env,
-            save_path=run_path,
-        )
-        eval_venv = build_eval_env(EVAL_TRACK_SEEDS, gui=False,
-                                   build_env_fn=build_env)
+        eval_venv = build_eval_env(EVAL_TRACK_SEEDS, gui=False)
         best_model_path = best_model_path_for(args.seed)
         best_vecnorm_path = vecnorm_for(best_model_path)
-        eval_callback = PeriodicEvalCallback(
+        eval_callback = LstmPeriodicEvalCallback(
             eval_venv=eval_venv,
             eval_freq=EVAL_FREQUENCY,
             log_dir=eval_log_dir(args.seed),
@@ -226,12 +215,11 @@ def main() -> int:
                 total_timesteps=args.timesteps,
                 progress_bar=True,
                 callback=[checkpoint_callback, vecnorm_ckpt_callback,
-                          replay_ckpt_callback, CustomMetricsCallback(), eval_callback],
+                          CustomMetricsCallback(), eval_callback],
                 reset_num_timesteps=args.resume_from is None,
             )
             model.save(str(args.model_path))
             venv.save(str(vecnorm_path))
-            model.save_replay_buffer(str(replay_buffer_path))
         finally:
             eval_venv.close()
 
@@ -239,13 +227,16 @@ def main() -> int:
         venv = VecNormalize.load(str(vecnorm_path), venv)
         venv.training = False
         venv.norm_reward = False
-        model = SAC.load(str(args.model_path), env=venv)
+        model = RecurrentPPO.load(str(args.model_path), env=venv)
+        wrapped = LstmEvalWrapper(model)
         obs = venv.reset()
+        wrapped.reset_state()
         while True:
-            action, _state = model.predict(obs, deterministic=True)
+            action, _state = wrapped.predict(obs, deterministic=True)
             obs, rewards, dones, infos = venv.step(action)
             if bool(dones[0]):
                 obs = venv.reset()
+                wrapped.reset_state()
 
     return 0
 

@@ -29,8 +29,10 @@ from stable_baselines3.common.vec_env import (
 )
 
 import sys
+from typing import Callable
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from ppo_runtime import build_env  # noqa: E402
+from ppo_runtime import build_env as _ppo_build_env  # noqa: E402
 
 from gym_line_follower.randomizer_dict import RandomizerDict  # noqa: E402
 from gym_line_follower.track import Track  # noqa: E402
@@ -143,9 +145,10 @@ class FixedTrackWrapper(gym.Wrapper):
 # Env construction
 # ---------------------------------------------------------------------------
 
-def _make_eval_env_factory(seeds: list[int], gui: bool):
+def _make_eval_env_factory(seeds: list[int], gui: bool,
+                           build_env_fn: Callable):
     def _factory():
-        env = build_env(
+        env = build_env_fn(
             seed=seeds[0],
             gui=gui,
             with_oscillation_penalty=True,
@@ -158,7 +161,8 @@ def _make_eval_env_factory(seeds: list[int], gui: bool):
 
 
 def build_eval_env(seeds: list[int] = EVAL_TRACK_SEEDS, *, gui: bool = False,
-                   vecnorm_path: Path | None = None) -> VecNormalize:
+                   vecnorm_path: Path | None = None,
+                   build_env_fn: Callable | None = None) -> VecNormalize:
     """Construct the persistent eval VecEnv.
 
     Parameters
@@ -172,7 +176,9 @@ def build_eval_env(seeds: list[int] = EVAL_TRACK_SEEDS, *, gui: bool = False,
         Otherwise build fresh stats which the caller must sync from a training
         env via ``sync_envs_normalization`` before each eval (callback path).
     """
-    venv = DummyVecEnv([_make_eval_env_factory(seeds, gui)])
+    if build_env_fn is None:
+        build_env_fn = _ppo_build_env
+    venv = DummyVecEnv([_make_eval_env_factory(seeds, gui, build_env_fn)])
     if vecnorm_path is not None:
         venv = VecNormalize.load(str(vecnorm_path), venv)
     else:
@@ -480,6 +486,11 @@ def run_evaluation(model, eval_venv, train_venv=None, *,
         last_termination = "unknown"
         last_success = False
         t0 = time.perf_counter()
+
+        # Stateful policies (e.g. LstmEvalWrapper for RecurrentPPO) clear their
+        # hidden state at episode boundaries via this optional hook.
+        if hasattr(model, "reset_state"):
+            model.reset_state()
 
         while not done:
             action, _ = model.predict(obs, deterministic=True)

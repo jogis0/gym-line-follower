@@ -1,10 +1,15 @@
-"""Shared SAC config used by training and testing scripts.
+"""Shared RecurrentPPO config used by training and testing scripts.
 
-Mirror of ppo_runtime.py for the SAC algorithm. Single source of truth for env
-kwargs, observation pipeline, oscillation penalty, and model checkpoint paths.
+Mirror of ppo_runtime.py for the RecurrentPPO algorithm (sb3_contrib). Single
+source of truth for env kwargs, observation pipeline, oscillation penalty, and
+model checkpoint paths.
 
 Why this exists: silent train/eval mismatches on obs_lag, vx_min, or
 smooth_steering produce policies that work in training and wiggle at test.
+
+Note: model artifacts live OUTSIDE the repo at D:/RecurrentPPO/seed_<seed>/
+because LSTM checkpoints + frequent VecNormalize pkls are large. TensorBoard
+logs stay in the repo at logs/recurrent_ppo_turtlebot3/seed_<seed>/.
 """
 from __future__ import annotations
 
@@ -15,12 +20,11 @@ from datetime import datetime
 from pathlib import Path
 
 import gymnasium as gym
-import numpy as np
 
 import gym_line_follower  # noqa: F401  registers TurtleBot3LineFollower-v0
 
 
-ALGORITHM = "SAC"
+ALGORITHM = "RecurrentPPO"
 ENV_ID = "TurtleBot3LineFollower-v0"
 ENV_KWARGS: dict = dict(
     randomize=True,
@@ -36,19 +40,16 @@ ENV_KWARGS: dict = dict(
 
 # OscillationPenaltyWrapper coefficient. testing/eval_framework.py reads this so
 # the eval-side steering penalty matches training.
-OSCILLATION_PENALTY_K = 1.5
-
-# ActionSmoothingWrapper EMA factor on the wz channel. alpha=1.0 disables
-# smoothing; lower = smoother bot motion. Applied to both training and eval
-# envs so policy behaviour matches at test time.
-ACTION_SMOOTHING_ALPHA = 0.5
+OSCILLATION_PENALTY_K = 0.6
 
 RESIZE_SHAPE = (84, 84)
 FRAME_STACK_SIZE = 4
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-MODEL_BASE_DIR = PROJECT_ROOT / "models" / ALGORITHM
-LOGS_BASE_DIR = PROJECT_ROOT / "logs" / "sac_turtlebot3"
+# Heavy artifacts (model zips, vecnorm pkls) live on the D: drive to keep the
+# repo small. Logs stay in-repo so TensorBoard runs from the project root.
+MODEL_BASE_DIR = Path("D:/RecurrentPPO")
+LOGS_BASE_DIR = PROJECT_ROOT / "logs" / "recurrent_ppo_turtlebot3"
 
 # Bump this when switching to a different checkpoint — both .zip and the
 # matching VecNormalize .pkl are derived from it.
@@ -56,59 +57,48 @@ MODEL_STEPS = 2_500_000
 DEFAULT_SEED = 42
 
 # Hyperparameters used by training. Mirrored into RunConfig at run start.
-# buffer_size=100k is the practical ceiling for 4x84x84 uint8 stacks (~3GB
-# with next_obs); raising it risks OOM during training.
-SAC_HYPERPARAMETERS: dict = dict(
-    policy="CnnPolicy",
-    learning_rate=2e-4,
-    buffer_size=100_000,
-    learning_starts=10_000,
+# CnnLstmPolicy is sb3_contrib's image-input recurrent policy. policy_kwargs
+# are at SB3 defaults; tune lstm_hidden_size if memory becomes a constraint.
+RECURRENT_PPO_HYPERPARAMETERS: dict = dict(
+    policy="CnnLstmPolicy",
+    n_steps=1024,
     batch_size=256,
-    tau=0.005,
-    gamma=0.99,
-    train_freq=1,
-    gradient_steps=2,
-    ent_coef="auto",
-    target_update_interval=1,
-    # Default target_entropy for a 2-D action box is -|A|=-2, which collapses
-    # ent_coef toward zero on image-based control. -1.0 collapsed to ~1e-3,
-    # 0.0 overshot (ent_coef climbed to 0.034 by 300k → policy too noisy,
-    # success regressed 8/10 → 2/10). -0.5 is the midpoint.
-    target_entropy=-0.5,
+    n_epochs=4,
+    ent_coef=0.02,
+    learning_rate=2e-4,
+    clip_range=0.2,
+    policy_kwargs=dict(
+        lstm_hidden_size=256,
+        n_lstm_layers=1,
+        enable_critic_lstm=True,
+    ),
 )
-N_ENVS = 1
+N_ENVS = 8
 EVAL_FREQUENCY = 50_000
 CHECKPOINT_FREQUENCY = 50_000
 
 
 def run_dir(seed: int) -> Path:
-    """Per-run artifact directory — checkpoints, vecnorm/buffer pkls, run_config.json live here."""
+    """Per-run artifact directory — checkpoints, vecnorm pkls, run_config.json live here."""
     return MODEL_BASE_DIR / f"seed_{seed}"
 
 
 def model_path_for(seed: int, steps: int | None = None) -> Path:
     """Resolve checkpoint path for (seed, steps). steps=None → final-model alias."""
     if steps is None:
-        return run_dir(seed) / "sac_turtlebot3.zip"
-    return run_dir(seed) / f"sac_turtlebot3_{steps}_steps.zip"
+        return run_dir(seed) / "recurrent_ppo_turtlebot3.zip"
+    return run_dir(seed) / f"recurrent_ppo_turtlebot3_{steps}_steps.zip"
 
 
 def best_model_path_for(seed: int) -> Path:
     """Path for the best-by-eval model snapshot saved during training."""
-    return run_dir(seed) / "sac_turtlebot3_best.zip"
+    return run_dir(seed) / "recurrent_ppo_turtlebot3_best.zip"
 
 
 def vecnorm_for(model_path: Path) -> Path:
-    """Map a sac_turtlebot3<...>.zip checkpoint to its sibling vecnorm .pkl."""
+    """Map a recurrent_ppo_turtlebot3<...>.zip checkpoint to its sibling vecnorm .pkl."""
     return model_path.with_name(
-        model_path.stem.replace("sac_turtlebot3", "sac_turtlebot3_vecnorm") + ".pkl"
-    )
-
-
-def replay_buffer_for(model_path: Path) -> Path:
-    """Map a sac_turtlebot3<...>.zip checkpoint to its sibling replay-buffer .pkl."""
-    return model_path.with_name(
-        model_path.stem.replace("sac_turtlebot3", "sac_turtlebot3_replay_buffer") + ".pkl"
+        model_path.stem.replace("recurrent_ppo_turtlebot3", "recurrent_ppo_turtlebot3_vecnorm") + ".pkl"
     )
 
 
@@ -124,29 +114,6 @@ def eval_log_dir(seed: int) -> Path:
 # that don't yet pass an explicit seed.
 MODEL_PATH = model_path_for(DEFAULT_SEED, MODEL_STEPS)
 VECNORM_PATH = vecnorm_for(MODEL_PATH)
-
-
-class ActionSmoothingWrapper(gym.Wrapper):
-    """EMA low-pass filter on the wz channel before the action reaches the bot.
-
-    The agent still emits raw actions (so OscillationPenaltyWrapper, which sits
-    outside this wrapper, sees and penalises the raw deltas). The bot only
-    receives the smoothed value, which physically prevents fast wobble.
-    """
-
-    def __init__(self, env, alpha: float = ACTION_SMOOTHING_ALPHA):
-        super().__init__(env)
-        self._alpha = alpha
-
-    def reset(self, **kwargs):
-        self._prev_wz = 0.0
-        return super().reset(**kwargs)
-
-    def step(self, action):
-        wz = self._alpha * float(action[1]) + (1.0 - self._alpha) * self._prev_wz
-        self._prev_wz = wz
-        smoothed = np.array([action[0], wz], dtype=np.asarray(action).dtype)
-        return super().step(smoothed)
 
 
 class OscillationPenaltyWrapper(gym.Wrapper):
@@ -191,7 +158,7 @@ def apply_observation_pipeline(env: gym.Env) -> gym.Env:
 def build_env(*, seed: int, gui: bool, with_oscillation_penalty: bool = True,
               env_kwargs_override: dict | None = None,
               eager_reset: bool = True) -> gym.Env:
-    """Build the env with all preprocessing, exactly as configured for SAC.
+    """Build the env with all preprocessing, exactly as configured for RecurrentPPO.
 
     `with_oscillation_penalty` only affects reward — actions and observations
     are unchanged either way. Default True (matches training); test scripts
@@ -209,14 +176,8 @@ def build_env(*, seed: int, gui: bool, with_oscillation_penalty: bool = True,
     env = gym.make(ENV_ID, gui=gui, **kwargs)
     if eager_reset:
         env.reset(seed=seed)
-    # Innermost: smooth the action that physically reaches the bot. The
-    # observation pipeline only touches obs, so it's order-agnostic relative
-    # to action wrappers.
-    env = ActionSmoothingWrapper(env)
     env = apply_observation_pipeline(env)
     if with_oscillation_penalty:
-        # Outermost: sees the agent's raw action and penalises raw deltas, so
-        # the policy is taught to emit smooth actions on its own.
         env = OscillationPenaltyWrapper(env)
     return env
 
@@ -246,7 +207,6 @@ class RunConfig:
     env_id: str
     env_kwargs: dict
     oscillation_penalty_k: float
-    action_smoothing_alpha: float
     resize_shape: tuple
     frame_stack_size: int
     n_envs: int
@@ -269,11 +229,10 @@ class RunConfig:
             env_id=ENV_ID,
             env_kwargs=dict(ENV_KWARGS),
             oscillation_penalty_k=OSCILLATION_PENALTY_K,
-            action_smoothing_alpha=ACTION_SMOOTHING_ALPHA,
             resize_shape=tuple(RESIZE_SHAPE),
             frame_stack_size=FRAME_STACK_SIZE,
             n_envs=N_ENVS,
-            hyperparameters=dict(SAC_HYPERPARAMETERS),
+            hyperparameters=dict(RECURRENT_PPO_HYPERPARAMETERS),
             eval_frequency=EVAL_FREQUENCY,
             checkpoint_frequency=CHECKPOINT_FREQUENCY,
             eval_track_seeds=list(eval_track_seeds),

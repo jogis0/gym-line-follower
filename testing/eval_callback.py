@@ -11,6 +11,7 @@ import json
 from pathlib import Path
 
 from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.vec_env import unwrap_vec_normalize
 
 from testing.eval_framework import run_evaluation
 
@@ -19,13 +20,18 @@ class PeriodicEvalCallback(BaseCallback):
     """Run a deterministic evaluation every N total timesteps."""
 
     def __init__(self, eval_venv, *, eval_freq: int, log_dir: Path,
-                 prefix: str = "eval", verbose: int = 1):
+                 prefix: str = "eval", verbose: int = 1,
+                 best_model_save_path: Path | None = None,
+                 best_vecnorm_save_path: Path | None = None):
         super().__init__(verbose=verbose)
         self.eval_venv = eval_venv
         self.eval_freq = eval_freq
         self.log_dir = Path(log_dir)
         self.prefix = prefix
         self._last_eval_step = 0
+        self._best_model_save_path = best_model_save_path
+        self._best_vecnorm_save_path = best_vecnorm_save_path
+        self._best_success_rate = -1.0
 
     def _on_step(self) -> bool:
         # SB3 calls this once per rollout step per env; n_calls is per-env
@@ -58,7 +64,18 @@ class PeriodicEvalCallback(BaseCallback):
         out_path = self.log_dir / f"{self.prefix}_{self.num_timesteps:09d}.json"
         with open(out_path, "w") as f:
             json.dump({"step": self.num_timesteps, **results}, f, indent=2)
+        sr = float(results["summary"].get("success_rate", 0.0))
         if self.verbose:
-            sr = results["summary"].get("success_rate", 0.0)
             print(f"[eval] success_rate={sr:.0%}  →  {out_path}")
+
+        if self._best_model_save_path is not None and sr > self._best_success_rate:
+            self._best_success_rate = sr
+            self._best_model_save_path.parent.mkdir(parents=True, exist_ok=True)
+            self.model.save(str(self._best_model_save_path))
+            if self._best_vecnorm_save_path is not None:
+                vec_norm = unwrap_vec_normalize(self.training_env)
+                if vec_norm is not None:
+                    vec_norm.save(str(self._best_vecnorm_save_path))
+            if self.verbose:
+                print(f"[eval] new best success_rate={sr:.0%} → {self._best_model_save_path}")
         return True
