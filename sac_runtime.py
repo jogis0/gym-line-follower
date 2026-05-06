@@ -18,6 +18,7 @@ import gymnasium as gym
 import numpy as np
 
 import gym_line_follower  # noqa: F401  registers TurtleBot3LineFollower-v0
+from sim_to_real_config import SIM_TO_REAL_OVERRIDES
 
 
 ALGORITHM = "SAC"
@@ -34,20 +35,23 @@ ENV_KWARGS: dict = dict(
     obs_lag=0,
 )
 
-# OscillationPenaltyWrapper coefficient. testing/eval_framework.py reads this so
-# the eval-side steering penalty matches training.
-OSCILLATION_PENALTY_K = 1.5
+# OscillationPenaltyWrapper coefficient. Matches PPO's K=0.6. testing/
+# eval_framework.py reads this so the eval-side steering penalty matches
+# training. Earlier we tried K=1.5 to fight wobble; that made the |Δwz|=0
+# "spin in place" attractor cheaper than imperfect driving and the policy
+# collapsed at ~step 350k. 0.6 is the value that worked for PPO.
+OSCILLATION_PENALTY_K = 0.6
 
 # ActionSmoothingWrapper EMA factor on the wz channel. alpha=1.0 disables
 # smoothing; lower = smoother bot motion. Applied to both training and eval
 # envs so policy behaviour matches at test time.
-ACTION_SMOOTHING_ALPHA = 0.5
+ACTION_SMOOTHING_ALPHA = 1.0
 
 RESIZE_SHAPE = (84, 84)
 FRAME_STACK_SIZE = 4
 
 PROJECT_ROOT = Path(__file__).resolve().parent
-MODEL_BASE_DIR = PROJECT_ROOT / "models" / ALGORITHM
+MODEL_BASE_DIR = Path("D:/SAC")
 LOGS_BASE_DIR = PROJECT_ROOT / "logs" / "sac_turtlebot3"
 
 # Bump this when switching to a different checkpoint — both .zip and the
@@ -76,7 +80,7 @@ SAC_HYPERPARAMETERS: dict = dict(
     # success regressed 8/10 → 2/10). -0.5 is the midpoint.
     target_entropy=-0.5,
 )
-N_ENVS = 1
+N_ENVS = 8
 EVAL_FREQUENCY = 50_000
 CHECKPOINT_FREQUENCY = 50_000
 
@@ -257,17 +261,22 @@ class RunConfig:
     started_at: str
     git_commit: str | None = None
     resumed_from: str | None = None
+    sim_to_real: bool = False
 
     @classmethod
     def capture(cls, *, seed: int, total_timesteps: int,
                 eval_track_seeds: list[int],
-                resumed_from: str | None = None) -> "RunConfig":
+                resumed_from: str | None = None,
+                sim_to_real: bool = False) -> "RunConfig":
+        env_kwargs = dict(ENV_KWARGS)
+        if sim_to_real:
+            env_kwargs.update(SIM_TO_REAL_OVERRIDES)
         return cls(
             algorithm=ALGORITHM,
             seed=seed,
             total_timesteps=total_timesteps,
             env_id=ENV_ID,
-            env_kwargs=dict(ENV_KWARGS),
+            env_kwargs=env_kwargs,
             oscillation_penalty_k=OSCILLATION_PENALTY_K,
             action_smoothing_alpha=ACTION_SMOOTHING_ALPHA,
             resize_shape=tuple(RESIZE_SHAPE),
@@ -280,6 +289,7 @@ class RunConfig:
             started_at=datetime.now().isoformat(timespec="seconds"),
             git_commit=_git_commit(),
             resumed_from=resumed_from,
+            sim_to_real=sim_to_real,
         )
 
     def save(self, path: Path) -> None:

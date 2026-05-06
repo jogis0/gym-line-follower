@@ -21,6 +21,7 @@ from gym_line_follower.wrappers import (
     ACTION_TABLE,
     DiscreteCmdVelWrapper,
 )
+from sim_to_real_config import SIM_TO_REAL_OVERRIDES
 
 
 ALGORITHM = "DQN"
@@ -50,13 +51,16 @@ DEFAULT_SEED = 42
 # DQN tends to be unstable above 2e-4 on images; tau=1.0 with a 1k hard-sync
 # interval is the classic Atari-DQN pattern. optimize_memory_usage halves
 # the replay-buffer RAM cost (4x84x84 uint8 stacks would otherwise need ~3GB
-# at 100k transitions including next_obs).
+# at 100k transitions including next_obs). It is incompatible with SB3's
+# default handle_timeout_termination, so we disable that via
+# replay_buffer_kwargs — the small bootstrap bias on truncated episodes is
+# acceptable since most terminations here are completion / penalty / line-loss.
 DQN_HYPERPARAMETERS: dict = dict(
     policy="CnnPolicy",
     learning_rate=1e-4,
     buffer_size=100_000,
     learning_starts=10_000,
-    batch_size=64,
+    batch_size=256,
     tau=1.0,
     gamma=0.99,
     train_freq=4,
@@ -67,8 +71,9 @@ DQN_HYPERPARAMETERS: dict = dict(
     exploration_final_eps=0.05,
     max_grad_norm=10.0,
     optimize_memory_usage=True,
+    replay_buffer_kwargs={"handle_timeout_termination": False},
 )
-N_ENVS = 1
+N_ENVS = 8
 EVAL_FREQUENCY = 50_000
 CHECKPOINT_FREQUENCY = 50_000
 
@@ -187,17 +192,22 @@ class RunConfig:
     started_at: str
     git_commit: str | None = None
     resumed_from: str | None = None
+    sim_to_real: bool = False
 
     @classmethod
     def capture(cls, *, seed: int, total_timesteps: int,
                 eval_track_seeds: list,
-                resumed_from: str | None = None) -> "RunConfig":
+                resumed_from: str | None = None,
+                sim_to_real: bool = False) -> "RunConfig":
+        env_kwargs = dict(ENV_KWARGS)
+        if sim_to_real:
+            env_kwargs.update(SIM_TO_REAL_OVERRIDES)
         return cls(
             algorithm=ALGORITHM,
             seed=seed,
             total_timesteps=total_timesteps,
             env_id=ENV_ID,
-            env_kwargs=dict(ENV_KWARGS),
+            env_kwargs=env_kwargs,
             action_table=[list(a) for a in ACTION_TABLE],
             action_names=list(ACTION_NAMES),
             resize_shape=tuple(RESIZE_SHAPE),
@@ -210,6 +220,7 @@ class RunConfig:
             started_at=datetime.now().isoformat(timespec="seconds"),
             git_commit=_git_commit(),
             resumed_from=resumed_from,
+            sim_to_real=sim_to_real,
         )
 
     def save(self, path: Path) -> None:

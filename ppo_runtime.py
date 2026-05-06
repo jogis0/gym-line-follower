@@ -24,6 +24,7 @@ from pathlib import Path
 import gymnasium as gym
 
 import gym_line_follower  # noqa: F401  registers TurtleBot3LineFollower-v0
+from sim_to_real_config import SIM_TO_REAL_OVERRIDES
 
 
 ALGORITHM = "PPO"
@@ -81,6 +82,11 @@ def model_path_for(seed: int, steps: int | None = None) -> Path:
     if steps is None:
         return run_dir(seed) / "ppo_turtlebot3.zip"
     return run_dir(seed) / f"ppo_turtlebot3_{steps}_steps.zip"
+
+
+def best_model_path_for(seed: int) -> Path:
+    """Path for the best-by-eval model snapshot saved during training."""
+    return run_dir(seed) / "ppo_turtlebot3_best.zip"
 
 
 def vecnorm_for(model_path: Path) -> Path:
@@ -205,17 +211,22 @@ class RunConfig:
     started_at: str
     git_commit: str | None = None
     resumed_from: str | None = None
+    sim_to_real: bool = False
 
     @classmethod
     def capture(cls, *, seed: int, total_timesteps: int,
                 eval_track_seeds: list[int],
-                resumed_from: str | None = None) -> "RunConfig":
+                resumed_from: str | None = None,
+                sim_to_real: bool = False) -> "RunConfig":
+        env_kwargs = dict(ENV_KWARGS)
+        if sim_to_real:
+            env_kwargs.update(SIM_TO_REAL_OVERRIDES)
         return cls(
             algorithm=ALGORITHM,
             seed=seed,
             total_timesteps=total_timesteps,
             env_id=ENV_ID,
-            env_kwargs=dict(ENV_KWARGS),
+            env_kwargs=env_kwargs,
             oscillation_penalty_k=OSCILLATION_PENALTY_K,
             resize_shape=tuple(RESIZE_SHAPE),
             frame_stack_size=FRAME_STACK_SIZE,
@@ -227,6 +238,7 @@ class RunConfig:
             started_at=datetime.now().isoformat(timespec="seconds"),
             git_commit=_git_commit(),
             resumed_from=resumed_from,
+            sim_to_real=sim_to_real,
         )
 
     def save(self, path: Path) -> None:

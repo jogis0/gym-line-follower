@@ -32,6 +32,7 @@ class PeriodicEvalCallback(BaseCallback):
         self._best_model_save_path = best_model_save_path
         self._best_vecnorm_save_path = best_vecnorm_save_path
         self._best_success_rate = -1.0
+        self._best_mean_reward = float("-inf")
 
     def _on_step(self) -> bool:
         # SB3 calls this once per rollout step per env; n_calls is per-env
@@ -68,8 +69,17 @@ class PeriodicEvalCallback(BaseCallback):
         if self.verbose:
             print(f"[eval] success_rate={sr:.0%}  →  {out_path}")
 
-        if self._best_model_save_path is not None and sr > self._best_success_rate:
+        # Tie-break on mean_total_reward so a higher-quality 8/10 wins over an
+        # earlier 8/10 — strict `>` would silently drop the better tie, plain
+        # `>=` would keep only the latest tie which can be a worse policy
+        # right before a collapse.
+        mean_reward = float(results["summary"].get("mean_total_reward", float("-inf")))
+        is_better = (sr > self._best_success_rate) or (
+            sr == self._best_success_rate and mean_reward > self._best_mean_reward
+        )
+        if self._best_model_save_path is not None and is_better:
             self._best_success_rate = sr
+            self._best_mean_reward = mean_reward
             self._best_model_save_path.parent.mkdir(parents=True, exist_ok=True)
             self.model.save(str(self._best_model_save_path))
             if self._best_vecnorm_save_path is not None:
@@ -77,5 +87,5 @@ class PeriodicEvalCallback(BaseCallback):
                 if vec_norm is not None:
                     vec_norm.save(str(self._best_vecnorm_save_path))
             if self.verbose:
-                print(f"[eval] new best success_rate={sr:.0%} → {self._best_model_save_path}")
+                print(f"[eval] new best success_rate={sr:.0%} reward={mean_reward:+.1f} → {self._best_model_save_path}")
         return True

@@ -25,6 +25,7 @@ from dqn_runtime import (  # noqa: E402
     vecnorm_for,
 )
 from gym_line_follower.wrappers import ACTION_TABLE  # noqa: E402
+from sim_to_real_config import SIM_TO_REAL_OVERRIDES  # noqa: E402
 
 
 class EpisodeMetricsWrapper(gym.Wrapper):
@@ -50,8 +51,9 @@ class EpisodeMetricsWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
-def make_env(*, seed: int, gui: bool) -> gym.Env:
-    env = build_env(seed=seed, gui=gui)
+def make_env(*, seed: int, gui: bool, sim_to_real: bool = False) -> gym.Env:
+    overrides = dict(SIM_TO_REAL_OVERRIDES) if sim_to_real else None
+    env = build_env(seed=seed, gui=gui, env_kwargs_override=overrides)
     env = EpisodeMetricsWrapper(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     return env
@@ -68,6 +70,8 @@ def main() -> int:
                         help="Override model output path. Default: models/DQN/seed_<seed>/dqn_turtlebot3.zip")
     parser.add_argument("--resume-from", type=Path, default=None,
                         help="Resume training from a checkpoint .zip. Loads matching vecnorm and replay-buffer pkls alongside.")
+    parser.add_argument("--sim-to-real", action="store_true",
+                        help="Enable sim-to-real overrides (domain_randomize_physics, sensor_noise, obs_lag).")
     args = parser.parse_args()
 
     if not args.train and not args.eval:
@@ -147,12 +151,12 @@ def main() -> int:
     replay_buffer_path = replay_buffer_for(args.model_path)
 
     def _make() -> gym.Env:
-        env = make_env(seed=args.seed, gui=args.gui)
+        env = make_env(seed=args.seed, gui=args.gui, sim_to_real=args.sim_to_real)
         env = Monitor(env)
         return env
 
     from stable_baselines3.common.env_checker import check_env
-    check_env(make_env(seed=args.seed, gui=False))
+    check_env(make_env(seed=args.seed, gui=False, sim_to_real=args.sim_to_real))
     venv = DummyVecEnv([_make] * N_ENVS)
     if args.resume_from is not None:
         vecnorm_resume = vecnorm_for(args.resume_from)
@@ -172,6 +176,7 @@ def main() -> int:
             total_timesteps=args.timesteps,
             eval_track_seeds=EVAL_TRACK_SEEDS,
             resumed_from=str(args.resume_from) if args.resume_from else None,
+            sim_to_real=args.sim_to_real,
         ).save(run_path / "run_config.json")
 
         if args.resume_from is not None:
@@ -209,7 +214,8 @@ def main() -> int:
             save_path=run_path,
         )
         eval_venv = build_eval_env(EVAL_TRACK_SEEDS, gui=False,
-                                   build_env_fn=build_env)
+                                   build_env_fn=build_env,
+                                   env_kwargs_extra=SIM_TO_REAL_OVERRIDES if args.sim_to_real else None)
         best_model_path = best_model_path_for(args.seed)
         best_vecnorm_path = vecnorm_for(best_model_path)
         eval_callback = PeriodicEvalCallback(

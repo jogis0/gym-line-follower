@@ -146,13 +146,17 @@ class FixedTrackWrapper(gym.Wrapper):
 # ---------------------------------------------------------------------------
 
 def _make_eval_env_factory(seeds: list[int], gui: bool,
-                           build_env_fn: Callable):
+                           build_env_fn: Callable,
+                           env_kwargs_extra: dict | None = None):
     def _factory():
+        overrides = {"randomize": False}
+        if env_kwargs_extra:
+            overrides.update(env_kwargs_extra)
         env = build_env_fn(
             seed=seeds[0],
             gui=gui,
             with_oscillation_penalty=True,
-            env_kwargs_override={"randomize": False},
+            env_kwargs_override=overrides,
             eager_reset=False,
         )
         env = FixedTrackWrapper(env, seeds)
@@ -162,7 +166,8 @@ def _make_eval_env_factory(seeds: list[int], gui: bool,
 
 def build_eval_env(seeds: list[int] = EVAL_TRACK_SEEDS, *, gui: bool = False,
                    vecnorm_path: Path | None = None,
-                   build_env_fn: Callable | None = None) -> VecNormalize:
+                   build_env_fn: Callable | None = None,
+                   env_kwargs_extra: dict | None = None) -> VecNormalize:
     """Construct the persistent eval VecEnv.
 
     Parameters
@@ -175,10 +180,15 @@ def build_eval_env(seeds: list[int] = EVAL_TRACK_SEEDS, *, gui: bool = False,
         If provided, load VecNormalize stats from disk (manual eval path).
         Otherwise build fresh stats which the caller must sync from a training
         env via ``sync_envs_normalization`` before each eval (callback path).
+    env_kwargs_extra:
+        Optional extra env kwargs merged on top of ``{"randomize": False}``
+        (e.g. sim-to-real overrides). ``randomize=False`` is always preserved
+        so eval tracks stay deterministic.
     """
     if build_env_fn is None:
         build_env_fn = _ppo_build_env
-    venv = DummyVecEnv([_make_eval_env_factory(seeds, gui, build_env_fn)])
+    venv = DummyVecEnv([_make_eval_env_factory(seeds, gui, build_env_fn,
+                                               env_kwargs_extra=env_kwargs_extra)])
     if vecnorm_path is not None:
         venv = VecNormalize.load(str(vecnorm_path), venv)
     else:

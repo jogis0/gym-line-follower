@@ -16,6 +16,7 @@ from dqn_runtime import (  # noqa: E402
     model_path_for,
     vecnorm_for,
 )
+from sim_to_real_config import SIM_TO_REAL_OVERRIDES  # noqa: E402
 
 from testing.eval_framework import EVAL_TRACK_SEEDS, build_eval_env, run_evaluation
 
@@ -71,6 +72,8 @@ def main():
     parser.add_argument("--best", action="store_true",
                         help="Use the best-by-eval checkpoint saved during training.")
     parser.add_argument("--no-gui", action="store_true", help="Disable PyBullet GUI window.")
+    parser.add_argument("--sim-to-real", action="store_true",
+                        help="Apply sim-to-real overrides (sensor noise, obs lag, physics randomization) to the eval env.")
     args = parser.parse_args()
 
     if args.model_path is None:
@@ -91,7 +94,8 @@ def main():
 
     eval_venv = build_eval_env(EVAL_TRACK_SEEDS, gui=not args.no_gui,
                                vecnorm_path=args.vecnorm_path,
-                               build_env_fn=build_env)
+                               build_env_fn=build_env,
+                               env_kwargs_extra=SIM_TO_REAL_OVERRIDES if args.sim_to_real else None)
     model = DQN.load(str(args.model_path), env=eval_venv)
     print(f"\nLoaded model from {args.model_path}")
     print(f"Evaluating on {len(EVAL_TRACK_SEEDS)} fixed tracks: {EVAL_TRACK_SEEDS}")

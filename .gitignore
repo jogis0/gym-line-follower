@@ -10,4 +10,5 @@ ppo_turtlebot3_*
 gym_line_follower/eval_textures/
 logs/
 sac_turtlebot3_*
-run_config.json
+run_config*
+dqn_turtlebot3_*
