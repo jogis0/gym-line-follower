@@ -1,8 +1,10 @@
 import collections
 import os
 import json
+import random
 import warnings
 from time import time, sleep
+from typing import Optional
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -15,6 +17,7 @@ from gym_line_follower.track_plane_builder import build_track_plane
 from gym_line_follower.bullet_client import BulletClient
 from gym_line_follower.line_follower_bot import LineFollowerBot
 from gym_line_follower.randomizer_dict import RandomizerDict
+from gym_line_follower.curriculum import CURRICULUM, apply_curriculum, resolve_theme
 
 
 def fig2rgb_array(fig):
@@ -37,7 +40,8 @@ class LineFollowerEnv(gym.Env):
                  domain_randomize_physics: bool = False,
                  sensor_noise: float = 0.0,
                  obs_lag: int = 0,
-                 vx_min: float = 0.0):
+                 vx_min: float = 0.0,
+                 track_render_config_path: Optional[str] = None):
         """
         Create environment.
         :param gui: True to enable pybullet OpenGL GUI
@@ -93,10 +97,16 @@ class LineFollowerEnv(gym.Env):
         # Auto-load track render config from disk when randomizing and no override was supplied.
         # This enables per-episode variance in line width, color, background texture, etc.
         if track_render_params is None and randomize:
-            render_cfg_path = os.path.join(self.local_dir, "track_render_config.json")
+            render_cfg_path = track_render_config_path or os.path.join(
+                self.local_dir, "track_render_config.json"
+            )
             self.track_render_params = RandomizerDict(json.load(open(render_cfg_path, "r")))
         else:
             self.track_render_params = track_render_params
+
+        # Dedicated RNG for curriculum's categorical fallback so it doesn't
+        # perturb the global random module that RandomizerDict.randomize reseeds.
+        self._cur_rng = random.Random()
         self.preset_track = track
         self.action_mode = action_mode.lower()
 
@@ -185,6 +195,7 @@ class LineFollowerEnv(gym.Env):
         if self._obs_buffer is not None:
             self._obs_buffer.clear()
         self.config.randomize()
+        apply_curriculum(self.config, CURRICULUM.progress, self._cur_rng)
 
         self.pb_client.resetSimulation()
         self.pb_client.setTimeStep(self.sim_time_step)
@@ -193,6 +204,8 @@ class LineFollowerEnv(gym.Env):
         if self.randomize:
             if self.track_render_params:
                 self.track_render_params.randomize()
+                apply_curriculum(self.track_render_params, CURRICULUM.progress, self._cur_rng)
+                resolve_theme(self.track_render_params)
 
         if self.preset_track:
             self.track = self.preset_track
@@ -484,6 +497,16 @@ class LineFollowerEnv(gym.Env):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
 
+    def set_curriculum(self, progress: float) -> None:
+        """Update the global curriculum progress consumed by reset() randomization.
+
+        Called via VecEnv.env_method from a training callback. Scope is the
+        process-level CURRICULUM singleton, which is correct for DummyVecEnv
+        (shared memory). For SubprocVecEnv each subprocess has its own copy,
+        and env_method walks each one — also correct.
+        """
+        CURRICULUM.progress = float(progress)
+
     def _get_info(self):
         (x, y), yaw = self.follower_bot.pos
         return {"x": x,
@@ -533,6 +556,7 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
         sensor_noise: float = 0.0,
         obs_lag: int = 0,
         vx_min: float = 0.0,
+        track_render_config_path: Optional[str] = None,
     ):
         if config is None:
             # Load default TurtleBot3 Burger-like configuration shipped with this package.
@@ -562,6 +586,7 @@ class TurtleBot3LineFollowerEnv(LineFollowerEnv):
             sensor_noise=sensor_noise,
             obs_lag=obs_lag,
             vx_min=vx_min,
+            track_render_config_path=track_render_config_path,
         )
 
 

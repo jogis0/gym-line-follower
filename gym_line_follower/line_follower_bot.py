@@ -494,12 +494,36 @@ class LineFollowerBot:
             nearVal=near,
             farVal=far,
         )
+        # Lighting kwargs are only forwarded if the active config opts in by
+        # declaring them. Legacy bot_config.json (no light keys) keeps PyBullet's
+        # no-kwarg default lighting → unchanged behavior for the LineFollower-v0
+        # base env. turtlebot3_burger_config.json declares them and gets
+        # randomized lighting under randomize=True.
+        light_kwargs = {}
+        if "light_dir_x" in self.config:
+            light_kwargs["lightDirection"] = [
+                float(self.config["light_dir_x"]),
+                float(self.config["light_dir_y"]),
+                float(self.config["light_dir_z"]),
+            ]
+        if "light_color_r" in self.config:
+            light_kwargs["lightColor"] = [
+                float(self.config["light_color_r"]),
+                float(self.config["light_color_g"]),
+                float(self.config["light_color_b"]),
+            ]
+        if "light_ambient_coeff" in self.config:
+            light_kwargs["lightAmbientCoeff"] = float(self.config["light_ambient_coeff"])
+        if "light_diffuse_coeff" in self.config:
+            light_kwargs["lightDiffuseCoeff"] = float(self.config["light_diffuse_coeff"])
+
         w, h, rgb, deth, seg = self.pb_client.getCameraImage(
             width=width,
             height=height,
             viewMatrix=vm,
             projectionMatrix=pm,
             renderer=p.ER_BULLET_HARDWARE_OPENGL,
+            **light_kwargs,
         )
         rgb = np.asarray(rgb, dtype=np.uint8)
         if rgb.ndim == 1:
@@ -518,4 +542,38 @@ class LineFollowerBot:
                 rgb, map_x, map_y, cv2.INTER_LINEAR,
                 borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0),
             )
+
+        rgb = self._augment_image(rgb)
         return rgb
+
+    def _augment_image(self, rgb: np.ndarray) -> np.ndarray:
+        """Apply post-capture image augmentation if any param is non-default.
+
+        Order: brightness → contrast → motion blur → gaussian noise.
+        Sensor noise is post-optics in real cameras, so it's applied last;
+        blurring noise destroys the high-frequency signature we want to teach.
+        """
+        brightness = float(self.config.get("image_brightness_factor", 1.0))
+        contrast = float(self.config.get("image_contrast_factor", 1.0))
+        noise_std = float(self.config.get("image_gaussian_noise_std", 0.0))
+        blur_kernel = int(self.config.get("image_motion_blur_kernel", 0))
+
+        if brightness == 1.0 and contrast == 1.0 and noise_std == 0.0 and blur_kernel <= 0:
+            return rgb
+
+        out = rgb.astype(np.float32)
+        if brightness != 1.0:
+            out = out * brightness
+        if contrast != 1.0:
+            mean = out.mean(axis=(0, 1), keepdims=True)
+            out = (out - mean) * contrast + mean
+        if blur_kernel >= 3 and blur_kernel % 2 == 1:
+            kernel = np.zeros((blur_kernel, blur_kernel), dtype=np.float32)
+            if np.random.rand() < 0.5:
+                kernel[blur_kernel // 2, :] = 1.0 / blur_kernel
+            else:
+                kernel[:, blur_kernel // 2] = 1.0 / blur_kernel
+            out = cv2.filter2D(out, -1, kernel)
+        if noise_std > 0.0:
+            out = out + np.random.normal(0.0, noise_std, out.shape).astype(np.float32)
+        return np.clip(out, 0.0, 255.0).astype(np.uint8)

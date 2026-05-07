@@ -1,0 +1,54 @@
+{
+  "line_bg_theme": {"default": "white_on_foam_dark",
+                    "choice": ["white_on_foam_dark", "white_on_black", "white_on_concrete",
+                               "black_on_white", "black_on_gray", "black_on_wood",
+                               "black_on_wood_2", "red_on_white", "blue_on_white"]},
+
+  "line_color": "white",
+  "background": "foam_dark",
+
+  "line_opacity": {"default": 0.8,
+                   "range": [0.55, 1.0]},
+  "line_thickness": {"default": 0.024,
+                     "range": [0.014, 0.034]},
+  "dashed": {"default": false,
+             "choice": [false]},
+
+  "num_verts": {"default": 18,
+                "range": [12, 24]},
+  "sharp_corner_prob": {"default": 0.2,
+                        "range": [0.2, 0.65]},
+
+  "variable_line_width": {"default": true,
+                          "choice": [true, false]},
+  "num_width_segments": {"default": 8,
+                         "range": [4, 14]},
+
+  "dead_ends_enabled": {"default": false,
+                        "choice": [true, false]},
+  "num_dead_ends": {"default": 3,
+                    "range": [1, 6]},
+  "dead_end_length": {"default": 0.08,
+                      "range": [0.04, 0.15]},
+
+  "crossings_enabled": {"default": false,
+                        "choice": [true, false]},
+  "num_crossings": {"default": 2,
+                    "range": [1, 4]},
+  "crossing_length": {"default": 0.10,
+                      "range": [0.06, 0.15]},
+
+  "gaps_enabled": {"default": false,
+                   "choice": [true, false]},
+  "num_gaps": {"default": 2,
+               "range": [1, 4]},
+  "gap_length": {"default": 0.04,
+                 "range": [0.02, 0.08]},
+
+  "line_noise_enabled": {"default": true,
+                         "choice": [true, false]},
+  "line_noise_intensity": {"default": 0.3,
+                           "range": [0.1, 0.65]},
+  "line_opacity_variation": {"default": 0.15,
+                              "range": [0.0, 0.45]}
+}

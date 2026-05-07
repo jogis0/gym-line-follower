@@ -44,10 +44,13 @@ class EpisodeMetricsWrapper(gym.Wrapper):
         return obs, reward, terminated, truncated, info
 
 
-def make_env(*, seed: int, gui: bool, sim_to_real: bool = False) -> gym.Env:
-    overrides = dict(SIM_TO_REAL_OVERRIDES) if sim_to_real else None
+def make_env(*, seed: int, gui: bool, sim_to_real: bool = False,
+             render_config: str | None = None) -> gym.Env:
+    overrides = dict(SIM_TO_REAL_OVERRIDES) if sim_to_real else {}
+    if render_config:
+        overrides["track_render_config_path"] = render_config
     env = build_env(seed=seed, gui=gui, with_oscillation_penalty=True,
-                    env_kwargs_override=overrides)
+                    env_kwargs_override=overrides if overrides else None)
     env = EpisodeMetricsWrapper(env)
     env = gym.wrappers.RecordEpisodeStatistics(env)
     return env
@@ -66,6 +69,16 @@ def main() -> int:
                         help="Resume training from a checkpoint .zip. Loads matching vecnorm and replay-buffer pkls alongside.")
     parser.add_argument("--sim-to-real", action="store_true",
                         help="Enable sim-to-real overrides (domain_randomize_physics, sensor_noise, obs_lag).")
+    parser.add_argument("--learning-rate", type=float, default=None,
+                        help="Override learning rate. Useful for fine-tuning at lower LR than training default.")
+    parser.add_argument("--curriculum-steps", type=int, default=0,
+                        help="Linearly ramp randomization 0->full over this many steps from training start. 0 = off.")
+    parser.add_argument("--checkpoint-freq", type=int, default=CHECKPOINT_FREQUENCY,
+                        help="Checkpoint every N timesteps. Default: sac_runtime.CHECKPOINT_FREQUENCY.")
+    parser.add_argument("--eval-freq", type=int, default=EVAL_FREQUENCY,
+                        help="Eval every N timesteps. Default: sac_runtime.EVAL_FREQUENCY.")
+    parser.add_argument("--render-config", type=str, default=None,
+                        help="Path to track render config JSON. Default: gym_line_follower/track_render_config.json.")
     args = parser.parse_args()
 
     if not args.train and not args.eval:
@@ -147,11 +160,31 @@ def main() -> int:
                 self.model.save_replay_buffer(str(path))
             return True
 
+    class CurriculumProgressCallback(BaseCallback):
+        """Pushes curriculum progress 0→1 over `curriculum_steps` from training start
+        into every env (via env_method, robust to subprocess vec envs).
+
+        For fine-tunes from a checkpoint, `start_step` is captured AFTER
+        SAC.load so num_timesteps - start_step is the post-resume training step.
+        """
+
+        def __init__(self, curriculum_steps: int, start_step: int):
+            super().__init__()
+            self._curriculum_steps = max(1, curriculum_steps)
+            self._start_step = start_step
+
+        def _on_step(self) -> bool:
+            progress = min(1.0, max(0.0, (self.num_timesteps - self._start_step) / self._curriculum_steps))
+            self.training_env.env_method("set_curriculum", progress)
+            self.logger.record("curriculum/progress", progress)
+            return True
+
     vecnorm_path = vecnorm_for(args.model_path)
     replay_buffer_path = replay_buffer_for(args.model_path)
 
     def _make() -> gym.Env:
-        env = make_env(seed=args.seed, gui=args.gui, sim_to_real=args.sim_to_real)
+        env = make_env(seed=args.seed, gui=args.gui, sim_to_real=args.sim_to_real,
+                       render_config=args.render_config)
         env = Monitor(env)
         return env
 
@@ -181,6 +214,19 @@ def main() -> int:
             resumed_from=str(args.resume_from) if args.resume_from else None,
             sim_to_real=args.sim_to_real,
         ).save(run_path / "run_config.json")
+        # Augment snapshot with runtime overrides for archival/comparison.
+        import json as _json
+        with open(run_path / "run_config.json", "r") as f:
+            _rc = _json.load(f)
+        _rc.update({
+            "learning_rate_override": args.learning_rate,
+            "curriculum_steps": args.curriculum_steps,
+            "checkpoint_freq": args.checkpoint_freq,
+            "eval_freq": args.eval_freq,
+            "render_config": args.render_config,
+        })
+        with open(run_path / "run_config.json", "w") as f:
+            _json.dump(_rc, f, indent=2)
 
         if args.resume_from is not None:
             print(f"Resuming from {args.resume_from}")
@@ -201,7 +247,15 @@ def main() -> int:
                 tensorboard_log=str(tb_log_dir(args.seed)),
                 **SAC_HYPERPARAMETERS,
             )
-        save_freq_per_env = max(1, CHECKPOINT_FREQUENCY // N_ENVS)
+        if args.learning_rate is not None:
+            from stable_baselines3.common.utils import get_schedule_fn
+            print(f"Overriding learning rate to {args.learning_rate}")
+            model.lr_schedule = get_schedule_fn(args.learning_rate)
+            model.learning_rate = args.learning_rate
+        # Captured AFTER SAC.load so on resume the curriculum measures progress
+        # from the resume point, not from absolute step 0.
+        curriculum_start_step = int(model.num_timesteps)
+        save_freq_per_env = max(1, args.checkpoint_freq // N_ENVS)
         checkpoint_callback = CheckpointCallback(
             save_freq=save_freq_per_env,
             save_path=str(run_path),
@@ -223,17 +277,23 @@ def main() -> int:
         best_vecnorm_path = vecnorm_for(best_model_path)
         eval_callback = PeriodicEvalCallback(
             eval_venv=eval_venv,
-            eval_freq=EVAL_FREQUENCY,
+            eval_freq=args.eval_freq,
             log_dir=eval_log_dir(args.seed),
             best_model_save_path=best_model_path,
             best_vecnorm_save_path=best_vecnorm_path,
         )
+        callbacks = [checkpoint_callback, vecnorm_ckpt_callback,
+                     replay_ckpt_callback, CustomMetricsCallback(), eval_callback]
+        if args.curriculum_steps > 0:
+            callbacks.append(CurriculumProgressCallback(
+                curriculum_steps=args.curriculum_steps,
+                start_step=curriculum_start_step,
+            ))
         try:
             model.learn(
                 total_timesteps=args.timesteps,
                 progress_bar=True,
-                callback=[checkpoint_callback, vecnorm_ckpt_callback,
-                          replay_ckpt_callback, CustomMetricsCallback(), eval_callback],
+                callback=callbacks,
                 reset_num_timesteps=args.resume_from is None,
             )
             model.save(str(args.model_path))
