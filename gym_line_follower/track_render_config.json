@@ -3,7 +3,7 @@
                  "choice": ["white"]},
   "background": {"default": "foam_dark",
                  "choice": ["foam_dark", "black"]},
-  "line_opacity": {"default": 0.8,
+  "line_opacity": {"default": 0.6,
                    "range": [0.6, 1.0]},
   "line_thickness": {"default": 0.024,
                      "range": [0.018, 0.030]},

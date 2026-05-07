@@ -1,0 +1,5 @@
+gymnasium>=0.29.0
+numpy
+opencv-python
+pybullet
+shapely

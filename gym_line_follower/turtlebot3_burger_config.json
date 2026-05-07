@@ -1,36 +1,134 @@
 {
   "robot_urdf": "robot.urdf",
-
   "wheel_joint_left_name": "wheel_left_joint",
   "wheel_joint_right_name": "wheel_right_joint",
-
   "wheel_radius": 0.033,
-  "wheel_separation": 0.160,
+  "wheel_separation": 0.16,
   "max_wheel_force": 0.5,
-  "wheel_lateral_friction": {"default": 1.0, "range": [0.6, 1.4]},
-
+  "wheel_lateral_friction": {
+    "default": 1.0,
+    "range": [
+      0.6,
+      1.4
+    ]
+  },
   "cmd_vel_vx_limit": 0.22,
   "cmd_vel_wz_limit": 2.84,
-  "motor_noise_std": {"default": 0.02, "range": [0.01, 0.04]},
-
-  "camera_pitch_noise": {"default": 0.0, "range": [-0.1, 0.1]},
-  "camera_roll_noise": {"default": 0.0, "range": [-0.05, 0.05]},
-  "camera_height_noise": {"default": 0.0, "range": [-0.02, 0.02]},
-
-  "light_diffuse_coeff":  {"default": 0.35, "range": [0.15, 0.7]},
-  "light_ambient_coeff":  {"default": 0.6,  "range": [0.3, 0.9]},
-  "light_color_r":        {"default": 1.0,  "range": [0.85, 1.15]},
-  "light_color_g":        {"default": 1.0,  "range": [0.85, 1.15]},
-  "light_color_b":        {"default": 1.0,  "range": [0.85, 1.15]},
-  "light_dir_x":          {"default": 0.0,  "range": [-1.0, 1.0]},
-  "light_dir_y":          {"default": 1.0,  "range": [-1.0, 1.0]},
-  "light_dir_z":          {"default": 1.0,  "range": [0.4, 1.5]},
-
-  "image_brightness_factor":  {"default": 1.0, "range": [0.7, 1.3]},
-  "image_contrast_factor":    {"default": 1.0, "range": [0.7, 1.3]},
-  "image_gaussian_noise_std": {"default": 0.0, "range": [0.0, 8.0]},
-  "image_motion_blur_kernel": {"default": 0,   "choice": [0, 0, 0, 3, 5]},
-
+  "motor_noise_std": {
+    "default": 0.02,
+    "range": [
+      0.01,
+      0.04
+    ]
+  },
+  "camera_pitch_noise": {
+    "default": 0.0,
+    "range": [
+      -0.1,
+      0.1
+    ]
+  },
+  "camera_roll_noise": {
+    "default": 0.0,
+    "range": [
+      -0.05,
+      0.05
+    ]
+  },
+  "camera_height_noise": {
+    "default": 0.0,
+    "range": [
+      -0.02,
+      0.02
+    ]
+  },
+  "light_diffuse_coeff": {
+    "default": 0.4594,
+    "range": [
+      0.15,
+      0.7
+    ]
+  },
+  "light_ambient_coeff": {
+    "default": 0.7688,
+    "range": [
+      0.3,
+      0.9
+    ]
+  },
+  "light_color_r": {
+    "default": 1.0,
+    "range": [
+      0.85,
+      1.15
+    ]
+  },
+  "light_color_g": {
+    "default": 1.0,
+    "range": [
+      0.85,
+      1.15
+    ]
+  },
+  "light_color_b": {
+    "default": 1.0,
+    "range": [
+      0.85,
+      1.15
+    ]
+  },
+  "light_dir_x": {
+    "default": 0.0,
+    "range": [
+      -1.0,
+      1.0
+    ]
+  },
+  "light_dir_y": {
+    "default": 1.0,
+    "range": [
+      -1.0,
+      1.0
+    ]
+  },
+  "light_dir_z": {
+    "default": 1.0,
+    "range": [
+      0.4,
+      1.5
+    ]
+  },
+  "image_brightness_factor": {
+    "default": 1.0,
+    "range": [
+      0.7,
+      1.3
+    ]
+  },
+  "image_contrast_factor": {
+    "default": 0.9813,
+    "range": [
+      0.7,
+      1.3
+    ]
+  },
+  "image_gaussian_noise_std": {
+    "default": 0.0,
+    "range": [
+      0.0,
+      8.0
+    ]
+  },
+  "image_motion_blur_kernel": {
+    "default": 0,
+    "choice": [
+      0,
+      0,
+      0,
+      3,
+      5
+    ]
+  },
   "down_camera": {
     "width": 160,
     "height": 120,
@@ -38,8 +136,16 @@
     "near": 0.01,
     "far": 1.5,
     "hz": 25,
-    "pos_in_base": [0.10, 0.0, 0.16],
-    "rpy_in_base": [0.0, 1.0472, 0.0],
+    "pos_in_base": [
+      0.1,
+      0.0,
+      0.16
+    ],
+    "rpy_in_base": [
+      0.0,
+      1.0472,
+      0.0
+    ],
     "distortion_k1": 0.1,
     "distortion_k2": 0.0
   }
