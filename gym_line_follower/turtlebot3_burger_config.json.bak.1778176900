@@ -43,14 +43,14 @@
     ]
   },
   "light_diffuse_coeff": {
-    "default": 0.2016,
+    "default": 0.4594,
     "range": [
       0.15,
       0.7
     ]
   },
   "light_ambient_coeff": {
-    "default": 0.8438,
+    "default": 0.7688,
     "range": [
       0.3,
       0.9
@@ -106,7 +106,7 @@
     ]
   },
   "image_contrast_factor": {
-    "default": 1.0,
+    "default": 0.9813,
     "range": [
       0.7,
       1.3

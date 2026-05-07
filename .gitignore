@@ -12,3 +12,5 @@ logs/
 sac_turtlebot3_*
 run_config*
 dqn_turtlebot3_*
+*.log
+*.txt

@@ -1,0 +1,6 @@
+source;share/gym_line_follower/hook/pythonpath.ps1
+source;share/gym_line_follower/hook/pythonpath.dsv
+source;share/gym_line_follower/hook/pythonpath.sh
+source;../../build/gym_line_follower/share/gym_line_follower/hook/pythonpath_develop.ps1
+source;../../build/gym_line_follower/share/gym_line_follower/hook/pythonpath_develop.dsv
+source;../../build/gym_line_follower/share/gym_line_follower/hook/pythonpath_develop.sh
